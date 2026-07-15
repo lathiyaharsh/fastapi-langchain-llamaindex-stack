@@ -36,6 +36,7 @@ export async function POST(request: NextRequest) {
     const result = await askRagFromFastApi({
       question: validation.data.question,
       sessionId: validation.data.sessionId,
+      history: validation.data.history,
       signal: request.signal,
     });
 

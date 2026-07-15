@@ -360,7 +360,7 @@ function ProviderSelect({
   onChange,
   disabled,
 }: {
-  providers: AIProvider[];
+  providers: readonly AIProvider[];
   value: AIProvider;
   onChange: (provider: AIProvider) => void;
   disabled?: boolean;
@@ -634,6 +634,11 @@ export default function FastApiChat() {
         ? {
             question: chatMessages[chatMessages.length - 1]?.content ?? "",
             session_id: sessionId,
+            // Prior turns only — restores FastAPI RAG memory after reload
+            history: chatMessages.slice(0, -1).map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
           }
         : {
             messages: chatMessages,

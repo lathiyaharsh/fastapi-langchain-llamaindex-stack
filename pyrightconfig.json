@@ -1,17 +1,14 @@
 {
-  "venvPath": ".",
+  "venvPath": "backend",
   "venv": ".venv",
   "pythonVersion": "3.10",
   "typeCheckingMode": "basic",
   "reportMissingImports": "error",
-  "extraPaths": [
-    ".venv/lib/python3.10/site-packages"
-  ],
   "executionEnvironments": [
     {
-      "root": ".",
+      "root": "backend",
       "extraPaths": [
-        ".venv/lib/python3.10/site-packages"
+        "backend/.venv/lib/python3.10/site-packages"
       ]
     }
   ]

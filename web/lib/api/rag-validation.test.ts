@@ -29,4 +29,30 @@ describe("validateRagRequest", () => {
     });
     expect(result.ok).toBe(false);
   });
+
+  it("accepts optional history", () => {
+    const result = validateRagRequest({
+      question: "Who set it?",
+      session_id: "docs_1",
+      history: [
+        { role: "user", content: "What is the fridge password?" },
+        { role: "assistant", content: "BANANA-42" },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.history).toHaveLength(2);
+      expect(result.data.history?.[0].content).toBe(
+        "What is the fridge password?"
+      );
+    }
+  });
+
+  it("rejects invalid history role", () => {
+    const result = validateRagRequest({
+      question: "Hello",
+      history: [{ role: "system", content: "nope" }],
+    });
+    expect(result.ok).toBe(false);
+  });
 });

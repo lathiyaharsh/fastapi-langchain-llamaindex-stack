@@ -290,6 +290,7 @@ export async function generateChatFromFastApi(options: {
 export async function askRagFromFastApi(options: {
   question: string;
   sessionId: string;
+  history?: Array<{ role: "user" | "assistant"; content: string }> | null;
   signal?: AbortSignal;
 }): Promise<
   | { ok: true; data: FastApiRagResponse }
@@ -308,6 +309,7 @@ export async function askRagFromFastApi(options: {
       body: JSON.stringify({
         question: options.question,
         session_id: options.sessionId,
+        ...(options.history != null ? { history: options.history } : {}),
       }),
       signal: options.signal,
     });

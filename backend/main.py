@@ -8,7 +8,11 @@ What this file does:
 
 Two kinds of "session" (both in-memory, lost on server restart):
   - chat_sessions  → general chat (/chat) — LangChain message history
-  - rag_sessions   → doc Q&A (/rag) — LlamaIndex chat engine per session
+  - rag_sessions   → doc Q&A (/rag) — cached LlamaIndex chat engine per session
+
+The Next.js UI also sends optional `history` on /chat and /rag so context
+survives uvicorn reload. With the UI, the browser is the source of truth;
+server memory is a fallback for direct API calls (curl, /docs).
 
 Run (from backend/, with venv active):
   uvicorn main:app --reload --host 127.0.0.1 --port 8000
@@ -16,8 +20,10 @@ Run (from backend/, with venv active):
 """
 
 import os
+import re
 import time
 from pathlib import Path
+from typing import Sequence
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -27,7 +33,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 # --- LangChain: orchestrates chat, prompts, memory ---
 from langchain_groq import ChatGroq
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 # --- LlamaIndex: load docs → embed → search → answer (RAG) ---
 from llama_index.core import (
@@ -43,10 +49,12 @@ from llama_index.embeddings.huggingface_api import HuggingFaceInferenceAPIEmbedd
 
 # Persist vectors in Supabase Postgres (pgvector) instead of RAM only
 from llama_index.vector_stores.supabase import SupabaseVectorStore
+from llama_index.core.schema import NodeWithScore
 from llama_index.core.chat_engine.types import BaseChatEngine, ChatMode
+from llama_index.core.llms import ChatMessage as LIChatMessage, MessageRole
 
-# ChatMode.CONDENSE_QUESTION = rewrite follow-ups ("who set it?") into full questions
-import vecs  # low-level client used to delete collections on rebuild
+# vecs — low-level client used to delete Supabase collections on /rag/rebuild
+import vecs
 
 # =============================================================================
 # CONFIG — read secrets from backend/.env (never commit .env)
@@ -70,6 +78,54 @@ SUPABASE_COLLECTION = os.getenv("SUPABASE_COLLECTION", "ai_chat_docs")
 # Markdown files for RAG (lab-secret.md, project-notes.md, …)
 DATA_DIR = Path(__file__).parent / "data"
 
+# SupabaseVectorStore scores are ~1-exp(-distance): lower = better match.
+# Only show source chunks within this gap of the best score (drops weak extras).
+RAG_SOURCE_SCORE_GAP = float(os.getenv("RAG_SOURCE_SCORE_GAP", "0.08"))
+
+# Greetings / intros / chat-memory questions — answer without showing doc sources.
+# Note: do NOT use SimilarityPostprocessor with SupabaseVectorStore — its
+# scores are ~1-exp(-distance) (lower = better), so a "min similarity" cutoff
+# drops the best matches and yields Empty Response.
+_CONVERSATIONAL_RE = re.compile(
+    r"^(?:"
+    r"hi(?:\s+there)?|hello(?:\s+there)?|hey(?:\s+there)?|hiya|howdy|"
+    r"good\s+(?:morning|afternoon|evening|night)|"
+    r"thanks?|thank\s+you|thx|ty|"
+    r"bye|goodbye|see\s+ya|see\s+you|"
+    r"ok(?:ay)?|cool|nice"
+    r")[!?. ]*$",
+    re.IGNORECASE,
+)
+
+# "hi my name is…", "what is my name", etc. — not document questions
+_CHAT_MEMORY_RE = re.compile(
+    r"(?is)^(?:"
+    r"(?:hi|hello|hey)[,!]?\s+.*\bmy\s+name\s+is\b.*"
+    r"|my\s+name\s+is\b.*"
+    r"|i(?:'m|\s+am)\s+[a-z][a-z'-]{1,30}\s*[!.]*"
+    r"|what(?:'s|\s+is)\s+my\s+name\b.*"
+    r"|who\s+am\s+i\b.*"
+    r"|do\s+you\s+remember\b.*"
+    r")$",
+)
+
+# Prompt for CONDENSE_PLUS_CONTEXT — uses docs AND chat history
+RAG_CONTEXT_PROMPT = """\
+You are a helpful assistant for document Q&A with conversation memory.
+
+Relevant documents (may be empty or unrelated to this turn):
+---------------------
+{context_str}
+---------------------
+
+Rules:
+- For greetings and small talk, reply naturally. Do not invent document facts.
+- If the user asks about something they said earlier in this chat \
+(e.g. their name), answer from the conversation history — not the documents.
+- For questions about the documents / project / lab secrets, use the documents.
+- If neither the documents nor the chat history contain the answer, say you don't know.
+"""
+
 # ---------------------------------------------------------------------------
 # In-process caches (not the same as Supabase — these reset when uvicorn restarts)
 # ---------------------------------------------------------------------------
@@ -78,10 +134,11 @@ DATA_DIR = Path(__file__).parent / "data"
 rag_index: VectorStoreIndex | None = None
 
 # /chat memory: session_id → list of HumanMessage / AIMessage
-chat_sessions: dict[str, list] = {}
+chat_sessions: dict[str, list[BaseMessage]] = {}
 
-# /rag memory: session_id → LlamaIndex chat engine (holds its own Q&A history)
-# Same session_id on /chat and /rag does NOT share memory — they are separate dicts.
+# /rag: session_id → cached CondensePlusContextChatEngine (retriever + LLM setup).
+# Conversation turns live in engine memory; optional client `history` rehydrates it.
+# Same session_id on /chat and /rag does NOT share memory — separate dicts.
 rag_sessions: dict[str, BaseChatEngine] = {}
 
 
@@ -252,38 +309,67 @@ def get_rag_index(*, force_rebuild: bool = False) -> VectorStoreIndex:
 
 def get_rag_chat_engine(session_id: str) -> BaseChatEngine:
     """
-      Return a per-session RAG chat engine with conversation memory.
+    Return a per-session RAG chat engine with conversation memory.
 
-      Why not use query_engine.query()?
-        - query() is stateless — each question is independent
-        - chat() remembers prior turns in this session
+    Why not use query_engine.query()?
+      - query() is stateless — each question is independent
+      - chat() remembers prior turns in this session
 
-    CONDENSE_QUESTION flow (simplified):
-        Turn 1: "What is the fridge password?"
-          → search docs → answer "BANANA-42"
-        Turn 2: "Who set it?"
-          → LLM rewrites to "Who set the fridge password?"
-          → search docs again with the full question → answer
+    CONDENSE_PLUS_CONTEXT (not CONDENSE_QUESTION):
+      - Rewrites follow-ups into standalone questions for retrieval
+      - Still passes chat history + retrieved docs into the final LLM prompt
+      - So "my name is Harsh" → "what is my name?" works from memory,
+        while "fridge password?" still answers from documents
 
-      Example: use session_id "docs-1" on every /rag call in one conversation.
+    Memory is in-process only (lost on uvicorn restart). Pass `history` from
+    the client to restore follow-up context after a restart.
     """
     if session_id in rag_sessions:
         return rag_sessions[session_id]
 
     index = get_rag_index()
     engine = index.as_chat_engine(
-        chat_mode=ChatMode.CONDENSE_QUESTION,
-        similarity_top_k=3,  # pass top 3 doc chunks to Groq for the answer
+        chat_mode=ChatMode.CONDENSE_PLUS_CONTEXT,
+        similarity_top_k=3,
+        context_prompt=RAG_CONTEXT_PROMPT,
     )
     rag_sessions[session_id] = engine
     return engine
 
 
-def _format_rag_sources(source_nodes) -> list[str]:
-    """Short previews of retrieved chunks — shows what grounded the answer."""
+def _is_conversational_query(question: str) -> bool:
+    """True for greetings / intros / chat-memory asks that should not cite docs."""
+    text = question.strip()
+    return bool(_CONVERSATIONAL_RE.match(text) or _CHAT_MEMORY_RE.match(text))
+
+
+def _format_rag_sources(
+    source_nodes: Sequence[NodeWithScore] | None,
+    *,
+    score_gap: float = RAG_SOURCE_SCORE_GAP,
+) -> list[str]:
+    """
+    Short previews of retrieved chunks that actually grounded the answer.
+
+    Supabase scores are lower-is-better. We keep the best match and any other
+    chunk within `score_gap` of it — so a weak hit like project-notes.md is
+    dropped when lab-secret.md is clearly the winner.
+    """
+    items = list(source_nodes or [])
+    if not items:
+        return []
+
+    scored: list[tuple[float | None, NodeWithScore]] = [
+        (item.score, item) for item in items
+    ]
+    known_scores = [s for s, _ in scored if s is not None]
+    best = min(known_scores) if known_scores else None
+
     sources: list[str] = []
-    for node in source_nodes or []:
-        text = node.get_content()
+    for score, item in scored:
+        if best is not None and score is not None and score > best + score_gap:
+            continue
+        text = item.get_content()
         sources.append(text[:240] + ("..." if len(text) > 240 else ""))
     return sources
 
@@ -314,11 +400,45 @@ class HistoryMessage(BaseModel):
     content: str = Field(..., min_length=1, max_length=8000)
 
 
-def _history_to_langchain(prior: list[HistoryMessage] | None) -> list:
+def _history_to_llamaindex(prior: list[HistoryMessage] | None) -> list[LIChatMessage]:
+    """Convert Next.js-style history into LlamaIndex chat messages."""
+    if not prior:
+        return []
+    out: list[LIChatMessage] = []
+    for item in prior:
+        text = item.content.strip()
+        if not text:
+            continue
+        role = MessageRole.USER if item.role == "user" else MessageRole.ASSISTANT
+        out.append(LIChatMessage(role=role, content=text))
+    return out[-20:]
+
+
+def sync_rag_session_history(
+    session_id: str, history: list[HistoryMessage] | None
+) -> BaseChatEngine:
+    """
+    Replace RAG engine memory with client-sent history when provided.
+
+    Same idea as sync_session_history for /chat — needed after Clear, page
+    refresh, or uvicorn reload (rag_sessions lives only in RAM).
+    """
+    engine = get_rag_chat_engine(session_id)
+    if history is None:
+        return engine
+    engine.reset()
+    # LlamaIndex chat engines keep history on a private memory attribute.
+    memory = getattr(engine, "memory", None) or getattr(engine, "_memory", None)
+    if memory is not None and hasattr(memory, "set"):
+        memory.set(_history_to_llamaindex(history))
+    return engine
+
+
+def _history_to_langchain(prior: list[HistoryMessage] | None) -> list[BaseMessage]:
     """Convert Next.js-style history into LangChain message objects."""
     if not prior:
         return []
-    out: list = []
+    out: list[BaseMessage] = []
     for item in prior:
         text = item.content.strip()
         if not text:
@@ -334,15 +454,17 @@ def sync_session_history(session_id: str, history: list[HistoryMessage] | None) 
     """
     Replace server memory with client-sent history when provided.
 
-    Needed when users switch providers (Gemini/HF keep history in the browser,
-    then Groq via FastAPI must catch up) or after Clear + new conversation.
+    Needed after page refresh, Clear, or uvicorn reload. The Next.js UI sends
+    `history` on every chat turn so Groq stays in sync with localStorage.
     """
     if history is None:
         return
     chat_sessions[session_id] = _history_to_langchain(history)
 
 
-def build_messages(session_id: str, message: str, reply_mode: str = "concise") -> list:
+def build_messages(
+    session_id: str, message: str, reply_mode: str = "concise"
+) -> list[BaseMessage]:
     """
     Build the message list Groq receives:
       [SystemMessage] + past turns + new HumanMessage
@@ -375,12 +497,14 @@ def remember(session_id: str, human: str, ai: str) -> None:
 # =============================================================================
 app = FastAPI(title="AI Chat Learning Backend")
 
-# Allow browser calls from Next.js (localhost:3000 → localhost:8000)
+# Allow browser calls from Next.js dev server (direct FastAPI testing / CORS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -408,11 +532,14 @@ class RagRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=8000)
     # Reuse the same session_id across calls for follow-up questions
     session_id: str = Field(default="default", min_length=1, max_length=64)
+    # Optional: prior turns from Next.js (excluding the current question).
+    # When set, replaces rag engine memory before this turn.
+    history: list[HistoryMessage] | None = None
 
 
 class RagResponse(BaseModel):
     answer: str
-    sources: list[str]  # retrieved chunk snippets — helps you debug RAG
+    sources: list[str]  # relevant chunk previews (empty for greetings / chat-memory)
 
 
 # =============================================================================
@@ -537,13 +664,17 @@ def clear_session(session_id: str):
 # =============================================================================
 # ROUTES — RAG (LlamaIndex + Supabase)
 #
-# Stateless part: document vectors in Supabase (survives restart)
-# Stateful part:  rag_sessions (conversation memory, in RAM only)
+# Stateless: document vectors in Supabase (survives restart)
+# Stateful:  rag_sessions caches chat engines; turns restored via `history`
+#
+# Chat mode: CONDENSE_PLUS_CONTEXT — condense follow-ups, retrieve docs,
+# then answer using both retrieved context and chat history.
 #
 # Test flow in /docs:
 #   1. POST /rag/rebuild
 #   2. POST /rag  {"question": "What is the fridge password?", "session_id": "docs-1"}
-#   3. POST /rag  {"question": "Who set it?", "session_id": "docs-1"}
+#   3. POST /rag  {"question": "Who set it?", "session_id": "docs-1",
+#                  "history": [{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}
 # =============================================================================
 @app.post("/rag", response_model=RagResponse)
 def rag(request: RagRequest):
@@ -552,15 +683,17 @@ def rag(request: RagRequest):
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
-        # One chat engine per session_id — memory lives inside the engine
-        chat_engine = get_rag_chat_engine(request.session_id)
-        # chat() = condense follow-up → retrieve chunks → Groq answer → save turn
+        # Rehydrate engine memory from client when provided (survives reload)
+        chat_engine = sync_rag_session_history(request.session_id, request.history)
+        # chat() → condense question → retrieve top-k → answer with docs + history
         result = chat_engine.chat(question)
 
-        return RagResponse(
-            answer=result.response,
-            sources=_format_rag_sources(result.source_nodes),
+        sources = (
+            []
+            if _is_conversational_query(question)
+            else _format_rag_sources(result.source_nodes)
         )
+        return RagResponse(answer=result.response, sources=sources)
     except HTTPException:
         raise
     except Exception as exc:
