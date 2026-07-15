@@ -67,7 +67,7 @@ The learning UI lives in **`fastapi-stack/web/`** (port 3001), not in the parent
 | --- | --- | --- |
 | Chat | `POST /api/chat` | `POST /chat/stream` (+ optional `history`) |
 | Ask My Docs | `POST /api/rag` | `POST /rag` |
-| Upload doc | `POST /api/rag/upload` | `POST /rag/upload` (.md / .txt, then rebuild) |
+| Upload doc | `POST /api/rag/upload` | `POST /rag/upload` (.md / .txt, incremental insert) |
 | Clear chat | `DELETE /api/chat/session` | `DELETE /chat/session/{id}` |
 | Clear docs | `DELETE /api/rag?session_id=` | `DELETE /rag/session/{id}` |
 

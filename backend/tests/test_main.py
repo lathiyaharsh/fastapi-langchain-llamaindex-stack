@@ -8,6 +8,7 @@ Run from backend/:
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -131,6 +132,32 @@ class MainRoutesTest(unittest.TestCase):
         response = self.client.delete("/rag/session/docs")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("docs", main.rag_sessions)
+
+    def test_upload_inserts_only_new_document(self) -> None:
+        uploaded = main.DATA_DIR / "incremental-test.md"
+        uploaded.unlink(missing_ok=True)
+        index = object()
+        try:
+            with (
+                patch.object(main, "get_rag_index", return_value=index) as get_index,
+                patch.object(main, "_insert_uploaded_document") as insert_document,
+            ):
+                response = self.client.post(
+                    "/rag/upload",
+                    files={
+                        "file": (
+                            "incremental-test.md",
+                            b"# Incremental upload\n",
+                            "text/markdown",
+                        )
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200)
+            get_index.assert_called_once_with()
+            insert_document.assert_called_once_with(index, uploaded)
+        finally:
+            uploaded.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

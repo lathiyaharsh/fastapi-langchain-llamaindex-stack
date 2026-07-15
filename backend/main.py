@@ -200,10 +200,18 @@ def _safe_upload_filename(raw: str) -> str:
 
 
 def _save_upload_to_data_dir(file: UploadFile) -> Path:
-    """Write one uploaded document into DATA_DIR (overwrites same basename)."""
+    """Write one new uploaded document into DATA_DIR."""
     filename = _safe_upload_filename(file.filename or "upload.md")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     dest = DATA_DIR / filename
+    if dest.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{filename} already exists. Rename the upload, or replace the "
+                "file in backend/data and call /rag/rebuild."
+            ),
+        )
 
     size = 0
     chunks: list[bytes] = []
@@ -225,6 +233,32 @@ def _save_upload_to_data_dir(file: UploadFile) -> Path:
 
     dest.write_bytes(content)
     return dest
+
+
+def _insert_uploaded_document(index: VectorStoreIndex, path: Path) -> None:
+    """Embed and insert only one new file into the existing Supabase index."""
+    documents = SimpleDirectoryReader(
+        input_files=[path],
+        filename_as_id=True,
+        raise_on_error=True,
+    ).load_data()
+    if not documents:
+        raise HTTPException(status_code=400, detail="No document content found")
+
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            for document in documents:
+                index.insert(document)
+            rag_sessions.clear()
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt < 3:
+                time.sleep(1.5 * attempt)
+
+    assert last_error is not None
+    raise last_error
 
 
 def _configure_llm_and_embeddings() -> None:
@@ -792,19 +826,25 @@ def rag_rebuild():
 @app.post("/rag/upload", response_model=RagUploadResponse)
 def rag_upload(file: UploadFile = File(...)):
     """
-    Upload a .md or .txt file into backend/data/ and rebuild the RAG index.
+    Upload a new .md or .txt file and insert only that document into RAG.
 
-    Sync (not async): rebuild uses LlamaIndex helpers that call asyncio.run()
-    internally — that fails if FastAPI's event loop is already running.
+    Sync (not async): LlamaIndex insertion calls sync wrappers internally that
+    conflict with FastAPI's running event loop in an async route.
 
-    Same end result as manually dropping a file in data/ and calling /rag/rebuild.
+    Existing filenames return 409 because replacing a document must first
+    remove its old vectors. Edit it in backend/data and use /rag/rebuild.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
 
+    saved: Path | None = None
     try:
+        # Initialize/load the existing index before saving, so an empty index
+        # does not ingest the new file once here and again during insert().
+        _safe_upload_filename(file.filename)
+        index = get_rag_index()
         saved = _save_upload_to_data_dir(file)
-        get_rag_index(force_rebuild=True)
+        _insert_uploaded_document(index, saved)
         file_count = len(list(DATA_DIR.glob("*"))) if DATA_DIR.exists() else 0
         return RagUploadResponse(
             status="uploaded",
@@ -813,6 +853,11 @@ def rag_upload(file: UploadFile = File(...)):
             data_dir=str(DATA_DIR),
         )
     except HTTPException:
+        if saved is not None:
+            saved.unlink(missing_ok=True)
         raise
     except Exception as exc:
+        # Do not leave a file on disk that failed to reach the vector index.
+        if saved is not None:
+            saved.unlink(missing_ok=True)
         raise HTTPException(status_code=502, detail=f"Upload error: {exc}") from exc

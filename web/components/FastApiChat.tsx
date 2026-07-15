@@ -427,7 +427,7 @@ function ReplyModeToggle({
   );
 }
 
-/** Upload a markdown/text doc into backend/data (rebuilds the RAG index). */
+/** Upload a markdown/text doc and incrementally insert it into the RAG index. */
 function DocUploadButton({
   disabled,
   onUploaded,

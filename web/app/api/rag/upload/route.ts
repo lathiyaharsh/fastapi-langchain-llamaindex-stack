@@ -1,5 +1,5 @@
 /**
- * POST /api/rag/upload — multipart file → FastAPI /rag/upload → rebuild index
+ * POST /api/rag/upload — multipart file → FastAPI incremental RAG insert
  */
 import { NextRequest } from "next/server";
 import { uploadRagDocumentFromFastApi } from "@/lib/api/fastapi-client";

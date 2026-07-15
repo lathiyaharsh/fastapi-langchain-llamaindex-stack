@@ -341,7 +341,7 @@ export type FastApiRagUploadResponse = {
   data_dir: string;
 };
 
-/** Upload a doc into backend/data and rebuild the RAG index. */
+/** Upload and incrementally insert one doc into the RAG index. */
 export async function uploadRagDocumentFromFastApi(options: {
   file: Blob;
   filename: string;

@@ -214,7 +214,7 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 | 2026-07-15 | Phase 5: Next.js BFF → FastAPI for Groq + Ask My Docs UI | SSE translation + history sync were the hard parts |
 | 2026-07-15 | RAG: `CONDENSE_PLUS_CONTEXT`, client `history`, source filtering | `CONDENSE_QUESTION` ignores chat memory; Supabase scores are lower-is-better |
 | 2026-07-15 | Pyright config + comment/doc cleanup | Point venv at `backend/.venv`; don't use SimilarityPostprocessor with Supabase |
-| 2026-07-15 | `POST /rag/upload` + UI Upload doc button | Saves to `backend/data/`, auto-rebuilds Supabase index |
+| 2026-07-15 | `POST /rag/upload` + UI Upload doc button | Saves to `backend/data/`, embeds/inserts only the new file |
 
 ---
 
