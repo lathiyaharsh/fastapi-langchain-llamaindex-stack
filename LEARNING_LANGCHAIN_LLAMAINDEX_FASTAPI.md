@@ -12,6 +12,14 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 
 **Goal:** Build a FastAPI backend that can chat (LangChain) and answer from documents (LlamaIndex), wired to the Next.js chat UI in `web/`.
 
+### Endpoints at a glance
+
+| UI mode | Next.js | FastAPI | LLM stack | Tools |
+| --- | --- | --- | --- | --- |
+| Chat | `POST /api/chat` | `POST /chat/stream` | LangChain + Groq | `get_weather` |
+| Ask My Docs | `POST /api/rag` | `POST /rag` | LlamaIndex + Groq | none |
+| Upload doc | `POST /api/rag/upload` | `POST /rag/upload` | LlamaIndex embed | none |
+
 ---
 
 ## Phase 0 — Setup
@@ -79,6 +87,21 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 - [x] Expose a FastAPI endpoint that uses the tool-aware chain
 - [x] Understand when *not* to use an agent (simple Q&A vs multi-step)
 
+**Current tool:** `get_weather(location)` on **Chat** only (`/chat`, `/chat/stream`) — not on `/rag`.
+
+How Groq “knows” about the tool (every request):
+
+1. `@tool` on `get_weather` → name, description, `location: str` schema
+2. `get_model().bind_tools([get_weather])` → LangChain sends a `tools` JSON block to Groq
+3. System prompt nudges: “use get_weather for current conditions”
+4. Groq may reply with `tool_calls` (not text) → backend runs `fetch_weather()` → Open-Meteo
+5. Backend sends `ToolMessage` with result → Groq writes the final natural-language answer
+
+Tool loop lives in `invoke_chat_with_tools()` (non-stream) and `astream_chat_with_tools()` (stream).
+Max 5 rounds (`MAX_CHAT_TOOL_ROUNDS`) to prevent infinite tool loops.
+
+**Streaming UX:** tool round + Open-Meteo HTTP (~1–2s) happens before first visible token — empty bubble + cursor is normal.
+
 ---
 
 ## Phase 3 — LlamaIndex + RAG
@@ -91,7 +114,7 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 - [x] Inspect retrieved source nodes / citations
 - [x] Tune top-k retrieval and filter weak source hits (`similarity_top_k=3`, score-gap filter)
 - [x] Wrap RAG in a FastAPI `POST /rag` endpoint
-- [x] Return answer + source snippets in the JSON response
+- [x] Return answer + source snippets in the JSON response (API still returns `sources`; UI hides them)
 - [x] Add `POST /rag/rebuild` so editing `data/` updates answers without restart
 - [ ] (Optional) Stream RAG answers over SSE
 - [x] Persist vectors in Supabase pgvector (survives restart)
@@ -144,10 +167,12 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 | Stop mid-stream still saved assistant text | `/chat/stream` checks `request.is_disconnected()` and skips `remember()` |
 | RAG non-streaming | `/api/rag` emits synthetic JSON SSE with `sources` on chunk/done |
 | Dual sessions | Separate `chat_*` / `docs_*` session IDs in localStorage; Clear only deletes active mode |
-| Greetings showed irrelevant doc sources | `_is_conversational_query` hides sources for hi / intros / “what is my name?” |
-| Weak RAG hits listed as sources (e.g. project-notes for password) | `_format_rag_sources` keeps chunks within score gap of best match |
+| Weak RAG hits in API `sources` | `_format_rag_sources` keeps chunks within score gap of best match |
 | `CONDENSE_QUESTION` forgot chat facts (name, etc.) | Switched to `CONDENSE_PLUS_CONTEXT` + custom `RAG_CONTEXT_PROMPT` |
 | `SimilarityPostprocessor(0.5)` broke all RAG answers | Removed — Supabase scores are lower-is-better, not cosine similarity |
+| Sources panel cluttered Docs UI | Removed Sources UI in `FastApiChat.tsx`; API still returns `sources` for curl/Swagger |
+| Streamed text had no spaces (`Thecurrentweather…`) | BFF `parseSseDataLine` — do not `.trim()` SSE payloads; spaces are real tokens |
+| Tool questions: blank bubble ~2s before first token | Expected — Groq tool round + Open-Meteo before final answer streams |
 
 ---
 
@@ -163,17 +188,17 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 - [x] Configure Pyright/basedpyright to use `backend/.venv` (fixes “import could not be resolved”)
 - [ ] (Optional) Dockerize the FastAPI service
 
-> Note: Next.js rate-limits at `/api/*`. FastAPI errors are sanitized for chat/RAG streams. Backend `unittest` covers health, history sync, conversational query detection, source filtering, session clear, URL normalize.
+> Note: Next.js rate-limits at `/api/*`. FastAPI errors are sanitized for chat/RAG streams. Backend `unittest` covers health, history sync, weather tool, tool loop, source filtering, session clear, URL normalize, upload.
 
 ---
 
 ## Mini projects (mark when done)
 
 - [x] **Project A:** FastAPI `/chat` with LangChain streaming (no tools)
-- [x] **Project B:** Same chat + one tool (search or calculator)
+- [x] **Project B:** Same chat + one tool (`get_weather` via Open-Meteo)
 - [x] **Project C:** FastAPI `/rag` over a folder of markdown notes
 - [x] **Project D:** Next.js UI → FastAPI backend (full loop)
-- [x] **Project E:** RAG answers include clickable/citable sources
+- [x] **Project E:** RAG answers include source snippets in API (UI sources panel removed later)
 
 ---
 
@@ -185,9 +210,9 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 - [x] Embeddings and vector similarity
 - [ ] Chunking trade-offs
 - [x] Hallucination vs grounded RAG answers
-- [ ] Tool calling / function calling
-- [ ] Agents vs plain chains
-- [ ] Sync vs async FastAPI endpoints
+- [x] Tool calling / function calling (`bind_tools`, `ToolMessage`, tool loop)
+- [x] Agents vs plain chains (we use a manual tool loop, not LangGraph agent)
+- [x] Sync vs async FastAPI endpoints (`/rag/upload` is sync `def` — LlamaIndex + event loop conflict if `async`)
 - [x] Why keep secrets server-side only
 - [x] Client `history` vs server session memory (who is source of truth?)
 
@@ -215,10 +240,14 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 | 2026-07-15 | RAG: `CONDENSE_PLUS_CONTEXT`, client `history`, source filtering | `CONDENSE_QUESTION` ignores chat memory; Supabase scores are lower-is-better |
 | 2026-07-15 | Pyright config + comment/doc cleanup | Point venv at `backend/.venv`; don't use SimilarityPostprocessor with Supabase |
 | 2026-07-15 | `POST /rag/upload` + UI Upload doc button | Saves to `backend/data/`, embeds/inserts only the new file |
-| 2026-07-15 | Project B: `calculator` tool on `/chat` + `/chat/stream` | `bind_tools` + tool loop; safe AST eval (no raw `eval`) |
+| 2026-07-15 | Project B: tool calling on `/chat` + `/chat/stream` | `bind_tools` + `invoke_chat_with_tools` / `astream_chat_with_tools` |
+| 2026-07-15 | Replaced calculator with `get_weather` (Open-Meteo) | Groq decides when to call; backend runs HTTP; no extra API key |
+| 2026-07-15 | Removed Sources panel from Docs UI | Simpler UX; dropped per-query source-hiding logic in `/rag` |
+| 2026-07-15 | Fixed SSE space stripping in BFF | `parseSseDataLine` — preserve leading spaces in streamed tokens |
+| 2026-07-15 | Comment pass on `backend/main.py` | Documented tool loop, streaming delay, history sync |
 
 ---
 
 ## Current focus
 
-> Project B done (calculator tool on chat). Optional next: Phase 6 logging/timeouts, RAG SSE streaming, or a second tool.
+> Project B done (`get_weather` on Chat). Optional next: Phase 6 logging/timeouts, RAG SSE streaming, tool-status UI (“Checking weather…”), or a second tool.
