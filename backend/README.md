@@ -73,6 +73,8 @@ The learning UI lives in **`fastapi-stack/web/`** (port 3001), not in the parent
 
 Chat requests may include `history` (prior turns) so Groq stays in sync when users switch from Gemini/HF.
 
+`/chat` and `/chat/stream` use LangChain **tool calling** with a `get_weather` tool (Open-Meteo, no extra API key). Try in Chat mode: *"What's the weather in London?"*
+
 `/chat/stream` skips `remember()` if the client disconnects (Stop button).
 
 ## Tests

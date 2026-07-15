@@ -135,26 +135,6 @@ function MessageContent({
   return <MarkdownContent content={content} />;
 }
 
-/** Sources panel under RAG assistant answers. */
-function SourcesList({ sources }: { sources: string[] }) {
-  if (sources.length === 0) return null;
-
-  return (
-    <details className="mt-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
-      <summary className="cursor-pointer select-none text-[var(--color-text)]">
-        Sources ({sources.length})
-      </summary>
-      <ul className="mt-2 list-disc space-y-2 pl-4">
-        {sources.map((source, index) => (
-          <li key={`${index}-${source.slice(0, 24)}`} className="break-words">
-            {source}
-          </li>
-        ))}
-      </ul>
-    </details>
-  );
-}
-
 /** Renders one chat bubble (user or assistant). */
 function MessageBubble({
   message,
@@ -190,10 +170,6 @@ function MessageBubble({
             isStreaming={isStreaming}
           />
         </div>
-        {!isUser &&
-          message.sources &&
-          message.sources.length > 0 &&
-          !isStreaming && <SourcesList sources={message.sources} />}
         {!isUser && message.content && !isStreaming && (
           <div className="flex justify-start gap-1 pl-1">
             <CopyButton text={message.content} />
@@ -568,7 +544,6 @@ export default function FastApiChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingStreamRef = useRef("");
-  const pendingSourcesRef = useRef<string[] | undefined>(undefined);
   const flushStreamRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const retryMessagesRef = useRef<ChatMessage[] | null>(null);
@@ -642,8 +617,7 @@ export default function FastApiChat() {
 
   const flushStreamBuffer = () => {
     const chunk = pendingStreamRef.current;
-    const sources = pendingSourcesRef.current;
-    if (!chunk && !sources) return;
+    if (!chunk) return;
 
     pendingStreamRef.current = "";
     setActiveMessages((prev) => {
@@ -652,8 +626,7 @@ export default function FastApiChat() {
       if (last?.role === "assistant") {
         next[next.length - 1] = {
           ...last,
-          content: chunk ? last.content + chunk : last.content,
-          ...(sources ? { sources } : {}),
+          content: last.content + chunk,
         };
       }
       return next;
@@ -695,7 +668,6 @@ export default function FastApiChat() {
     setCanRetry(false);
     setIsLoading(true);
     setIsStreaming(false);
-    pendingSourcesRef.current = undefined;
     retryMessagesRef.current = chatMessages;
 
     const controller = new AbortController();
@@ -754,16 +726,10 @@ export default function FastApiChat() {
 
         if (event.type === "chunk") {
           appendStreamChunk(event.content);
-          if (event.sources) {
-            pendingSourcesRef.current = event.sources;
-          }
         }
 
         if (event.type === "done") {
           setActiveProvider(event.provider);
-          if (event.sources) {
-            pendingSourcesRef.current = event.sources;
-          }
         }
 
         if (event.type === "error") {

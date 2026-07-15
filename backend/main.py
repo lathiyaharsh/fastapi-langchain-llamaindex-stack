@@ -3,8 +3,18 @@ AI Chat Learning Backend
 
 What this file does:
   - FastAPI HTTP API (routes, validation, CORS, SSE)
-  - LangChain + Groq for chat (/chat, /chat/stream, session memory)
+  - LangChain + Groq for chat (/chat, /chat/stream, session memory, weather tool)
   - LlamaIndex RAG over ./data (/rag) with vectors in Supabase pgvector
+
+Request flow (high level):
+  Chat mode:
+    POST /chat/stream → build_messages → astream_chat_with_tools
+      → Groq may call get_weather → Open-Meteo → Groq writes final answer
+      → SSE tokens to Next.js BFF → UI
+
+  Docs mode:
+    POST /rag → sync_rag_session_history → chat_engine.chat
+      → embed question → retrieve top-k from Supabase → Groq answers with context
 
 Two kinds of "session" (both in-memory, lost on server restart):
   - chat_sessions  → general chat (/chat) — LangChain message history
@@ -22,8 +32,11 @@ Run (from backend/, with venv active):
 import os
 import re
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Sequence
+
+import httpx
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -31,9 +44,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
 
-# --- LangChain: orchestrates chat, prompts, memory ---
+# --- LangChain: orchestrates chat, prompts, memory, tools ---
 from langchain_groq import ChatGroq
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.tools import tool
 
 # --- LlamaIndex: load docs → embed → search → answer (RAG) ---
 from llama_index.core import (
@@ -83,34 +103,10 @@ MAX_UPLOAD_BYTES = int(os.getenv("RAG_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
 
 # SupabaseVectorStore scores are ~1-exp(-distance): lower = better match.
 # Only show source chunks within this gap of the best score (drops weak extras).
-RAG_SOURCE_SCORE_GAP = float(os.getenv("RAG_SOURCE_SCORE_GAP", "0.08"))
-
-# Greetings / intros / chat-memory questions — answer without showing doc sources.
 # Note: do NOT use SimilarityPostprocessor with SupabaseVectorStore — its
 # scores are ~1-exp(-distance) (lower = better), so a "min similarity" cutoff
 # drops the best matches and yields Empty Response.
-_CONVERSATIONAL_RE = re.compile(
-    r"^(?:"
-    r"hi(?:\s+there)?|hello(?:\s+there)?|hey(?:\s+there)?|hiya|howdy|"
-    r"good\s+(?:morning|afternoon|evening|night)|"
-    r"thanks?|thank\s+you|thx|ty|"
-    r"bye|goodbye|see\s+ya|see\s+you|"
-    r"ok(?:ay)?|cool|nice"
-    r")[!?. ]*$",
-    re.IGNORECASE,
-)
-
-# "hi my name is…", "what is my name", etc. — not document questions
-_CHAT_MEMORY_RE = re.compile(
-    r"(?is)^(?:"
-    r"(?:hi|hello|hey)[,!]?\s+.*\bmy\s+name\s+is\b.*"
-    r"|my\s+name\s+is\b.*"
-    r"|i(?:'m|\s+am)\s+[a-z][a-z'-]{1,30}\s*[!.]*"
-    r"|what(?:'s|\s+is)\s+my\s+name\b.*"
-    r"|who\s+am\s+i\b.*"
-    r"|do\s+you\s+remember\b.*"
-    r")$",
-)
+RAG_SOURCE_SCORE_GAP = float(os.getenv("RAG_SOURCE_SCORE_GAP", "0.08"))
 
 # Prompt for CONDENSE_PLUS_CONTEXT — uses docs AND chat history
 RAG_CONTEXT_PROMPT = """\
@@ -250,6 +246,7 @@ def _insert_uploaded_document(index: VectorStoreIndex, path: Path) -> None:
         try:
             for document in documents:
                 index.insert(document)
+            # Cached RAG engines were built against the old index state — drop them.
             rag_sessions.clear()
             return
         except Exception as exc:
@@ -422,12 +419,6 @@ def get_rag_chat_engine(session_id: str) -> BaseChatEngine:
     return engine
 
 
-def _is_conversational_query(question: str) -> bool:
-    """True for greetings / intros / chat-memory asks that should not cite docs."""
-    text = question.strip()
-    return bool(_CONVERSATIONAL_RE.match(text) or _CHAT_MEMORY_RE.match(text))
-
-
 def _format_rag_sources(
     source_nodes: Sequence[NodeWithScore] | None,
     *,
@@ -460,6 +451,139 @@ def _format_rag_sources(
 
 
 # =============================================================================
+# CHAT TOOLS — LangChain @tool + bind_tools loop
+#
+# How tool calling works (Project B):
+#   1. User asks "What's the weather in London?"
+#   2. Groq returns tool_calls (not text) → we run get_weather → ToolMessage
+#   3. Groq reads the tool result and writes the final natural-language reply
+#
+# bind_tools() tells Groq which functions exist; we execute them locally and
+# feed results back. The model never calls Open-Meteo directly.
+# =============================================================================
+# WMO weather codes returned by Open-Meteo — map to readable labels.
+WEATHER_CODE_LABELS: dict[int, str] = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Foggy",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    71: "Slight snow",
+    73: "Moderate snow",
+    75: "Heavy snow",
+    80: "Rain showers",
+    95: "Thunderstorm",
+}
+
+MAX_CHAT_TOOL_ROUNDS = 5  # safety cap — prevents infinite tool loops
+
+
+def fetch_weather(location: str) -> str:
+    """
+    Look up current weather via Open-Meteo (free, no API key).
+
+    Two HTTP calls:
+      1. Geocoding API — city name → lat/lon
+      2. Forecast API   — lat/lon → current conditions
+    """
+    place = location.strip()
+    if not place:
+        return "Error: location cannot be empty."
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            # Step 1: resolve "London" → coordinates
+            geo = client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={
+                    "name": place,
+                    "count": 1,
+                    "language": "en",
+                    "format": "json",
+                },
+            )
+            geo.raise_for_status()
+            results = geo.json().get("results") or []
+            if not results:
+                return f"Could not find a place named '{place}'."
+
+            hit = results[0]
+            name = str(hit.get("name", place))
+            country = str(hit.get("country", ""))
+            lat = float(hit["latitude"])
+            lon = float(hit["longitude"])
+
+            # Step 2: fetch live weather for those coordinates
+            wx = client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "current": (
+                        "temperature_2m,relative_humidity_2m,apparent_temperature,"
+                        "precipitation,weather_code,wind_speed_10m"
+                    ),
+                    "timezone": "auto",
+                },
+            )
+            wx.raise_for_status()
+            current = wx.json().get("current") or {}
+    except httpx.HTTPError as exc:
+        return f"Weather lookup failed: {exc}"
+    except (KeyError, TypeError, ValueError) as exc:
+        return f"Weather lookup failed: {exc}"
+
+    code = current.get("weather_code")
+    label = (
+        WEATHER_CODE_LABELS.get(int(code), "Unknown conditions")
+        if code is not None
+        else "Unknown conditions"
+    )
+    location_label = f"{name}, {country}" if country else name
+
+    temp = current.get("temperature_2m")
+    feels = current.get("apparent_temperature")
+    humidity = current.get("relative_humidity_2m")
+    wind = current.get("wind_speed_10m")
+    precip = current.get("precipitation")
+
+    parts = [f"{location_label}: {label}"]
+    if temp is not None and feels is not None:
+        parts.append(f"Temperature {temp}°C (feels like {feels}°C)")
+    elif temp is not None:
+        parts.append(f"Temperature {temp}°C")
+    if humidity is not None:
+        parts.append(f"humidity {humidity}%")
+    if wind is not None:
+        parts.append(f"wind {wind} km/h")
+    if precip is not None:
+        parts.append(f"precipitation {precip} mm")
+    return ". ".join(parts) + "."
+
+
+@tool
+def get_weather(location: str) -> str:
+    """
+    Get current weather for a city or place (e.g. London, Mumbai, New York).
+
+    The @tool decorator registers name + docstring for Groq tool-calling.
+    fetch_weather() is separate so unit tests can mock HTTP without LangChain.
+    """
+    return fetch_weather(location)
+
+
+CHAT_TOOLS = [get_weather]
+CHAT_TOOL_BY_NAME = {item.name: item for item in CHAT_TOOLS}
+
+
+# =============================================================================
 # CHAT HELPERS — LangChain + Groq
 # =============================================================================
 def get_model() -> ChatGroq:
@@ -476,6 +600,115 @@ def get_model() -> ChatGroq:
         model=GROQ_MODEL,
         temperature=0.7,  # higher = more creative; lower = more focused
     )
+
+
+def get_model_with_tools() -> ChatGroq:
+    """Groq chat model with weather tool bound for tool-calling."""
+    # bind_tools returns a Runnable; ChatGroq type is close enough for our use.
+    return get_model().bind_tools(CHAT_TOOLS)  # type: ignore[return-value]
+
+
+def _ai_text(message: AIMessage) -> str:
+    content = message.content
+    return content if isinstance(content, str) else str(content)
+
+
+def _run_tool_call(tool_call: object) -> str:
+    """Execute one tool call Groq requested; return text for ToolMessage."""
+    # Groq/LangChain may send tool_call as dict or structured object.
+    if isinstance(tool_call, dict):
+        name = str(tool_call.get("name", ""))
+        args = tool_call.get("args", {})
+    else:
+        name = str(getattr(tool_call, "name", ""))
+        args = getattr(tool_call, "args", {})
+    tool_fn = CHAT_TOOL_BY_NAME.get(name)
+    if tool_fn is None:
+        return f"Unknown tool: {name}"
+    if not isinstance(args, dict):
+        return f"Invalid tool args for {name}"
+    return str(tool_fn.invoke(args))
+
+
+def _tool_call_id(tool_call: object) -> str:
+    if isinstance(tool_call, dict):
+        return str(tool_call.get("id", ""))
+    return str(getattr(tool_call, "id", ""))
+
+
+def invoke_chat_with_tools(messages: list[BaseMessage]) -> str:
+    """
+    Tool-calling loop for POST /chat (non-streaming).
+
+    Repeat until Groq returns plain text (no tool_calls) or we hit the round cap:
+      AIMessage(tool_calls=[...]) → run tools → ToolMessage → invoke again
+    """
+    model = get_model_with_tools()
+    conversation = list(messages)
+    last_ai: AIMessage | None = None
+
+    for _ in range(MAX_CHAT_TOOL_ROUNDS):
+        last_ai = model.invoke(conversation)
+        if not last_ai.tool_calls:
+            return _ai_text(last_ai)
+
+        # Model wants a tool — append its request, then our tool results.
+        conversation.append(last_ai)
+        for tool_call in last_ai.tool_calls:
+            conversation.append(
+                ToolMessage(
+                    content=_run_tool_call(tool_call),
+                    tool_call_id=_tool_call_id(tool_call),
+                )
+            )
+
+    return _ai_text(last_ai) if last_ai else ""
+
+
+async def astream_chat_with_tools(
+    messages: list[BaseMessage],
+) -> AsyncIterator[str]:
+    """
+    Tool-calling loop for POST /chat/stream.
+
+    Important UX note: during a tool round the UI sees nothing for ~1–2s because:
+      - Groq streams tool_call_chunks (not user-visible text)
+      - we run get_weather (two HTTP calls to Open-Meteo)
+    Only the final answer round yields text tokens to SSE.
+    """
+    model = get_model_with_tools()
+    conversation = list(messages)
+
+    for _ in range(MAX_CHAT_TOOL_ROUNDS):
+        gathered: AIMessage | None = None
+        async for chunk in model.astream(conversation):
+            # Tool-call tokens — accumulate, do not stream to client yet.
+            if chunk.tool_call_chunks:
+                gathered = chunk if gathered is None else gathered + chunk
+                continue
+
+            text = chunk.content if isinstance(chunk.content, str) else ""
+            if text:
+                yield text
+            gathered = chunk if gathered is None else gathered + chunk
+
+        if gathered is None:
+            return
+
+        if gathered.tool_calls:
+            # Tool round finished — run tool(s), then loop for final answer.
+            conversation.append(gathered)
+            for tool_call in gathered.tool_calls:
+                conversation.append(
+                    ToolMessage(
+                        content=_run_tool_call(tool_call),
+                        tool_call_id=_tool_call_id(tool_call),
+                    )
+                )
+            continue
+
+        # Final text answer — already streamed above.
+        return
 
 
 class HistoryMessage(BaseModel):
@@ -539,8 +772,10 @@ def sync_session_history(session_id: str, history: list[HistoryMessage] | None) 
     """
     Replace server memory with client-sent history when provided.
 
-    Needed after page refresh, Clear, or uvicorn reload. The Next.js UI sends
-    `history` on every chat turn so Groq stays in sync with localStorage.
+    Pattern: Next.js stores chat in localStorage and sends `history` on every
+    turn (all prior messages except the current one). That way uvicorn reload
+    or Clear+continue does not lose context. If history is omitted (curl), we
+    keep whatever is already in chat_sessions.
     """
     if history is None:
         return
@@ -563,7 +798,13 @@ def build_messages(
         else "Give a thorough, well-structured answer with useful detail."
     )
     return [
-        SystemMessage(content=f"You are a helpful assistant. {style}"),
+        SystemMessage(
+            content=(
+                "You are a helpful assistant with a weather tool. "
+                "Use get_weather for current conditions instead of guessing. "
+                f"{style}"
+            )
+        ),
         *history,
         HumanMessage(content=message),
     ]
@@ -574,7 +815,8 @@ def remember(session_id: str, human: str, ai: str) -> None:
     history = chat_sessions.setdefault(session_id, [])
     history.append(HumanMessage(content=human))
     history.append(AIMessage(content=ai))
-    chat_sessions[session_id] = history[-20:]  # cap context size
+    # Keep last 20 messages (~10 turns) to stay within Groq context limits.
+    chat_sessions[session_id] = history[-20:]
 
 
 # =============================================================================
@@ -624,7 +866,7 @@ class RagRequest(BaseModel):
 
 class RagResponse(BaseModel):
     answer: str
-    sources: list[str]  # relevant chunk previews (empty for greetings / chat-memory)
+    sources: list[str]  # relevant chunk previews (API only; UI may ignore)
 
 
 class RagUploadResponse(BaseModel):
@@ -661,16 +903,20 @@ def health():
         "groq_model": GROQ_MODEL,
         "hf_embed_model": HF_EMBED_MODEL,
         "supabase_collection": SUPABASE_COLLECTION,
+        "chat_tools": [item.name for item in CHAT_TOOLS],
     }
 
 
 # =============================================================================
 # ROUTES — chat (LangChain)
+#
+# Next.js calls POST /api/chat → proxies here as POST /chat/stream.
+# FastAPI sends plain-text SSE; the Next BFF translates to JSON events.
 # =============================================================================
 SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
-    "X-Accel-Buffering": "no",
+    "X-Accel-Buffering": "no",  # nginx: don't buffer SSE
 }
 
 
@@ -683,14 +929,8 @@ def chat(request: ChatRequest):
 
     try:
         sync_session_history(request.session_id, request.history)
-        model = get_model()
         messages = build_messages(request.session_id, message, request.reply_mode)
-        ai_message = model.invoke(messages)
-        reply = (
-            ai_message.content
-            if isinstance(ai_message.content, str)
-            else str(ai_message.content)
-        )
+        reply = invoke_chat_with_tools(messages)
         remember(request.session_id, message, reply)
     except HTTPException:
         raise
@@ -705,8 +945,15 @@ async def chat_stream(request: Request, body: ChatRequest):
     """
     Stream tokens over SSE as Groq generates them.
 
-    Event format: data: <chunk>\\n\\n  then  data: [DONE]\\n\\n
-    On client disconnect, stops without calling remember().
+    Wire format (one event per line):
+      data: Hello\\n\\n
+      data: [DONE]\\n\\n
+
+    Newlines inside a token are escaped as \\n so each SSE line stays intact.
+    The Next.js BFF must NOT .trim() payloads — spaces are real tokens.
+
+    If the user hits Stop, we detect disconnect and skip remember() so a
+    half-finished reply is not saved to session memory.
     """
     message = body.message.strip()
     if not message:
@@ -714,7 +961,6 @@ async def chat_stream(request: Request, body: ChatRequest):
 
     try:
         sync_session_history(body.session_id, body.history)
-        model = get_model()
         messages = build_messages(body.session_id, message, body.reply_mode)
     except HTTPException:
         raise
@@ -723,17 +969,18 @@ async def chat_stream(request: Request, body: ChatRequest):
         parts: list[str] = []
         disconnected = False
         try:
-            async for chunk in model.astream(messages):
+            async for text in astream_chat_with_tools(messages):
                 if await request.is_disconnected():
                     disconnected = True
                     break
-                text = chunk.content if isinstance(chunk.content, str) else ""
                 if text:
                     parts.append(text)
-                    safe = text.replace("\n", "\\n")  # keep SSE one-line per event
+                    # Escape newlines — SSE spec uses \\n\\n as event delimiter.
+                    safe = text.replace("\n", "\\n")
                     yield f"data: {safe}\n\n"
             if disconnected:
                 return
+            # Only persist full replies — not partial streams after Stop.
             remember(body.session_id, message, "".join(parts))
             yield "data: [DONE]\n\n"
         except Exception:
@@ -770,6 +1017,12 @@ def clear_session(session_id: str):
 # =============================================================================
 @app.post("/rag", response_model=RagResponse)
 def rag(request: RagRequest):
+    """
+    Document Q&A with chat memory (Ask My Docs).
+
+    Per request: condense question → retrieve top-k chunks → Groq answers.
+    sources[] is returned for API clients; the web UI may hide it.
+    """
     question = request.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
@@ -779,12 +1032,7 @@ def rag(request: RagRequest):
         chat_engine = sync_rag_session_history(request.session_id, request.history)
         # chat() → condense question → retrieve top-k → answer with docs + history
         result = chat_engine.chat(question)
-
-        sources = (
-            []
-            if _is_conversational_query(question)
-            else _format_rag_sources(result.source_nodes)
-        )
+        sources = _format_rag_sources(result.source_nodes)
         return RagResponse(answer=result.response, sources=sources)
     except HTTPException:
         raise

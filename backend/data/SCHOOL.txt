@@ -1,0 +1,337 @@
+=========================================
+SCHOOL INFORMATION DATABASE
+=========================================
+
+School Name:
+Green Valley Public School
+
+School Code:
+GVPS-2045
+
+Established:
+1998
+
+School Type:
+Private
+
+Board:
+CBSE
+
+Address:
+45 Lake View Road
+Ahmedabad
+Gujarat
+India
+
+Principal:
+Dr. Meera Shah
+
+Vice Principal:
+Rajesh Kumar
+
+School Motto:
+Learning Today, Leading Tomorrow
+
+-----------------------------------------
+ACADEMIC YEAR
+-----------------------------------------
+
+Academic Year:
+2026-2027
+
+Working Days:
+220
+
+School Timing:
+8:00 AM - 2:30 PM
+
+Library Timing:
+8:00 AM - 5:00 PM
+
+-----------------------------------------
+CLASSES
+-----------------------------------------
+
+Classes Offered:
+Grade 1 to Grade 12
+
+Sections:
+A
+B
+C
+
+Medium of Instruction:
+English
+
+-----------------------------------------
+STUDENTS
+-----------------------------------------
+
+Total Students:
+1240
+
+Boys:
+670
+
+Girls:
+570
+
+Average Class Size:
+35
+
+-----------------------------------------
+TEACHERS
+-----------------------------------------
+
+Total Teachers:
+72
+
+Mathematics:
+12
+
+Science:
+14
+
+English:
+10
+
+Social Science:
+9
+
+Computer Science:
+8
+
+Languages:
+19
+
+-----------------------------------------
+DEPARTMENTS
+-----------------------------------------
+
+Science
+
+Mathematics
+
+Commerce
+
+Arts
+
+Computer Science
+
+Physical Education
+
+Music
+
+Library
+
+-----------------------------------------
+SUBJECTS
+-----------------------------------------
+
+English
+
+Mathematics
+
+Science
+
+Social Science
+
+Computer Science
+
+Hindi
+
+Gujarati
+
+Physics
+
+Chemistry
+
+Biology
+
+Economics
+
+Business Studies
+
+Accountancy
+
+History
+
+Geography
+
+Political Science
+
+Physical Education
+
+-----------------------------------------
+COMPUTER LAB
+-----------------------------------------
+
+Number of Labs:
+3
+
+Desktop Computers:
+90
+
+Operating System:
+Ubuntu 24.04
+
+Programming Languages:
+Python
+Java
+C++
+JavaScript
+
+Internet:
+1 Gbps Fiber
+
+-----------------------------------------
+LIBRARY
+-----------------------------------------
+
+Books:
+18500
+
+Digital Books:
+4200
+
+Magazine Subscriptions:
+28
+
+Newspapers:
+7
+
+Librarian:
+Mrs. Nisha Patel
+
+-----------------------------------------
+SPORTS
+-----------------------------------------
+
+Football
+
+Cricket
+
+Basketball
+
+Volleyball
+
+Table Tennis
+
+Badminton
+
+Athletics
+
+Chess
+
+Sports Coach:
+Mr. Arjun Desai
+
+-----------------------------------------
+EXAMINATION
+-----------------------------------------
+
+Term 1:
+July
+
+Mid-Term:
+September
+
+Term 2:
+December
+
+Final Examination:
+March
+
+Passing Marks:
+35%
+
+-----------------------------------------
+CLUBS
+-----------------------------------------
+
+Science Club
+
+Coding Club
+
+Robotics Club
+
+Eco Club
+
+Drama Club
+
+Music Club
+
+Photography Club
+
+Debate Club
+
+-----------------------------------------
+FACILITIES
+-----------------------------------------
+
+Smart Classrooms
+
+Wi-Fi Campus
+
+Science Labs
+
+Computer Labs
+
+Library
+
+Auditorium
+
+Cafeteria
+
+Medical Room
+
+School Bus Service
+
+-----------------------------------------
+SCHOOL EVENTS
+-----------------------------------------
+
+Annual Day
+
+Sports Day
+
+Science Exhibition
+
+Coding Competition
+
+Debate Competition
+
+Art Exhibition
+
+Independence Day Celebration
+
+Teachers' Day Celebration
+
+-----------------------------------------
+CONTACT
+-----------------------------------------
+
+Phone:
++91-79-4567-8901
+
+Email:
+info@gvps.edu.in
+
+Website:
+https://www.gvps.edu.in
+
+-----------------------------------------
+FEE STRUCTURE
+-----------------------------------------
+
+Grade 1-5:
+₹45,000 per year
+
+Grade 6-8:
+₹55,000 per year
+
+Grade 9-10:
+₹65,000 per year
+
+Grade 11-12:
+₹75,000 per year

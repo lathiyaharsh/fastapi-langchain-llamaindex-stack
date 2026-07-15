@@ -73,11 +73,11 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 
 ### Tools & agents (intro)
 
-- [ ] Define one simple tool (e.g. calculator or time)
-- [ ] Bind tools to a chat model
-- [ ] Run a basic agent / tool-calling loop once
-- [ ] Expose a FastAPI endpoint that uses the tool-aware chain
-- [ ] Understand when *not* to use an agent (simple Q&A vs multi-step)
+- [x] Define one simple tool (e.g. calculator or time)
+- [x] Bind tools to a chat model
+- [x] Run a basic agent / tool-calling loop once
+- [x] Expose a FastAPI endpoint that uses the tool-aware chain
+- [x] Understand when *not* to use an agent (simple Q&A vs multi-step)
 
 ---
 
@@ -170,7 +170,7 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 ## Mini projects (mark when done)
 
 - [x] **Project A:** FastAPI `/chat` with LangChain streaming (no tools)
-- [ ] **Project B:** Same chat + one tool (search or calculator)
+- [x] **Project B:** Same chat + one tool (search or calculator)
 - [x] **Project C:** FastAPI `/rag` over a folder of markdown notes
 - [x] **Project D:** Next.js UI → FastAPI backend (full loop)
 - [x] **Project E:** RAG answers include clickable/citable sources
@@ -215,9 +215,10 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 | 2026-07-15 | RAG: `CONDENSE_PLUS_CONTEXT`, client `history`, source filtering | `CONDENSE_QUESTION` ignores chat memory; Supabase scores are lower-is-better |
 | 2026-07-15 | Pyright config + comment/doc cleanup | Point venv at `backend/.venv`; don't use SimilarityPostprocessor with Supabase |
 | 2026-07-15 | `POST /rag/upload` + UI Upload doc button | Saves to `backend/data/`, embeds/inserts only the new file |
+| 2026-07-15 | Project B: `calculator` tool on `/chat` + `/chat/stream` | `bind_tools` + tool loop; safe AST eval (no raw `eval`) |
 
 ---
 
 ## Current focus
 
-> Phase 5 done (hybrid Groq via FastAPI, Docs mode, RAG polish). Optional next: tools/agents (Project B) or Phase 6 logging/timeouts.
+> Project B done (calculator tool on chat). Optional next: Phase 6 logging/timeouts, RAG SSE streaming, or a second tool.

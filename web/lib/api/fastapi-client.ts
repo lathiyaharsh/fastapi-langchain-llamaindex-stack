@@ -61,14 +61,32 @@ export function mapMessagesToFastApiChat(
 }
 
 /**
+ * Extract the data payload from one SSE line.
+ * Per the SSE spec, only one leading space after "data:" is optional —
+ * do NOT trim the rest or leading/trailing token spaces are lost.
+ */
+export function parseSseDataLine(line: string): string | null {
+  const raw = line.endsWith("\r") ? line.slice(0, -1) : line;
+  if (!raw.startsWith("data:")) return null;
+  let payload = raw.slice(5);
+  if (payload.startsWith(" ")) payload = payload.slice(1);
+  return payload;
+}
+
+/**
  * Parse one FastAPI SSE data payload into a Next.js-compatible event object,
  * or null if the line should be skipped.
  */
 export function translateFastApiSsePayload(
   payload: string
 ): object | null {
-  if (!payload || payload === "[DONE]") {
-    return payload === "[DONE]" ? { type: "done", provider: "groq" } : null;
+  if (payload === "[DONE]") {
+    return { type: "done", provider: "groq" };
+  }
+
+  // Empty "data:" line — ignore. A lone space is a real token (keep it).
+  if (payload === "") {
+    return null;
   }
 
   if (payload.startsWith("[ERROR]")) {
@@ -121,10 +139,9 @@ export function createFastApiTranslationStream(
           buffer = lines.pop() ?? "";
 
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
+            const payload = parseSseDataLine(line);
+            if (payload === null) continue;
 
-            const payload = trimmed.slice(5).trim();
             const event = translateFastApiSsePayload(payload);
             if (!event) continue;
 

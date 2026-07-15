@@ -8,7 +8,7 @@ Run from backend/:
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -23,6 +23,93 @@ class MainHelpersTest(unittest.TestCase):
     def tearDown(self) -> None:
         main.chat_sessions.clear()
         main.rag_sessions.clear()
+
+    def test_fetch_weather_formats_response(self) -> None:
+        geo_response = MagicMock()
+        geo_response.raise_for_status = MagicMock()
+        geo_response.json.return_value = {
+            "results": [
+                {
+                    "name": "London",
+                    "country": "United Kingdom",
+                    "latitude": 51.5,
+                    "longitude": -0.12,
+                }
+            ]
+        }
+
+        wx_response = MagicMock()
+        wx_response.raise_for_status = MagicMock()
+        wx_response.json.return_value = {
+            "current": {
+                "temperature_2m": 18.0,
+                "apparent_temperature": 17.0,
+                "relative_humidity_2m": 62,
+                "wind_speed_10m": 12.0,
+                "precipitation": 0.0,
+                "weather_code": 2,
+            }
+        }
+
+        client = MagicMock()
+        client.get.side_effect = [geo_response, wx_response]
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+
+        with patch("main.httpx.Client", return_value=client):
+            result = main.fetch_weather("London")
+
+        self.assertIn("London, United Kingdom", result)
+        self.assertIn("Partly cloudy", result)
+        self.assertIn("18.0°C", result)
+
+    def test_get_weather_tool(self) -> None:
+        with patch.object(main, "fetch_weather", return_value="Mumbai: Clear sky."):
+            result = main.get_weather.invoke({"location": "Mumbai"})
+        self.assertEqual(result, "Mumbai: Clear sky.")
+
+    def test_invoke_chat_with_tools(self) -> None:
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        weather_result = (
+            "London, United Kingdom: Partly cloudy. "
+            "Temperature 18.0°C (feels like 17.0°C)."
+        )
+        tool_call = {
+            "name": "get_weather",
+            "args": {"location": "London"},
+            "id": "call_1",
+        }
+        first = AIMessage(content="", tool_calls=[tool_call])
+        second = AIMessage(content="It's partly cloudy in London at 18°C.")
+        seen: list[list[object]] = []
+
+        class FakeBound:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def invoke(self, messages: list[object]) -> AIMessage:
+                self.calls += 1
+                seen.append(list(messages))
+                if self.calls == 1:
+                    return first
+                return second
+
+        fake = FakeBound()
+        with (
+            patch.object(main, "get_model_with_tools", return_value=fake),
+            patch.object(main, "fetch_weather", return_value=weather_result),
+        ):
+            reply = main.invoke_chat_with_tools(
+                [HumanMessage(content="What's the weather in London?")]
+            )
+        self.assertEqual(reply, "It's partly cloudy in London at 18°C.")
+        self.assertEqual(fake.calls, 2)
+        self.assertEqual(len(seen[1]), 3)
+        last = seen[1][-1]
+        self.assertIsInstance(last, ToolMessage)
+        assert isinstance(last, ToolMessage)
+        self.assertEqual(last.content, weather_result)
 
     def test_chat_request_accepts_optional_history(self) -> None:
         body = main.ChatRequest(
@@ -40,23 +127,12 @@ class MainHelpersTest(unittest.TestCase):
         content = messages[0].content
         self.assertIsInstance(content, str)
         assert isinstance(content, str)
-        self.assertTrue(content.startswith("You are a helpful assistant"))
+        self.assertIn("weather tool", content)
         self.assertEqual(len(messages), 4)
 
     def test_normalize_pg_url_encodes_password(self) -> None:
         url = main._normalize_pg_url("postgres://user:p@ss@host:5432/db")
         self.assertEqual(url, "postgresql://user:p%40ss@host:5432/db")
-
-    def test_is_conversational_query(self) -> None:
-        self.assertTrue(main._is_conversational_query("hi"))
-        self.assertTrue(main._is_conversational_query("Hello!"))
-        self.assertTrue(main._is_conversational_query("  hey there  "))
-        self.assertTrue(main._is_conversational_query("thank you"))
-        self.assertTrue(main._is_conversational_query("HI MY NAME IS HARSH"))
-        self.assertTrue(main._is_conversational_query("WHAT IS MY NAME"))
-        self.assertTrue(main._is_conversational_query("my name is Ada"))
-        self.assertFalse(main._is_conversational_query("What is the fridge password?"))
-        self.assertFalse(main._is_conversational_query("hi, what is the fridge password?"))
 
     def test_history_to_llamaindex(self) -> None:
         msgs = main._history_to_llamaindex(
@@ -118,6 +194,8 @@ class MainRoutesTest(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["status"], "ok")
         self.assertIn("groq_key_configured", data)
+        self.assertIn("chat_tools", data)
+        self.assertEqual(data["chat_tools"], ["get_weather"])
 
     def test_clear_chat_session(self) -> None:
         main.chat_sessions["abc"] = []

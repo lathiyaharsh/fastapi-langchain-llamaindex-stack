@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   mapMessagesToFastApiChat,
+  parseSseDataLine,
   translateFastApiSsePayload,
 } from "@/lib/api/fastapi-client";
 import type { ChatMessage } from "@/lib/ai/types";
@@ -62,5 +63,26 @@ describe("translateFastApiSsePayload", () => {
 
   it("returns null for empty payload", () => {
     expect(translateFastApiSsePayload("")).toBeNull();
+  });
+
+  it("keeps a space-only chunk (do not drop whitespace tokens)", () => {
+    expect(translateFastApiSsePayload(" ")).toEqual({
+      type: "chunk",
+      content: " ",
+    });
+  });
+});
+
+describe("parseSseDataLine", () => {
+  it("preserves leading spaces inside the token after data:", () => {
+    // Backend yields: data: {token}  — Groq often sends " weather" as one token
+    expect(parseSseDataLine("data:  weather")).toBe(" weather");
+    expect(parseSseDataLine("data: The")).toBe("The");
+    expect(parseSseDataLine("data:  ")).toBe(" ");
+  });
+
+  it("ignores non-data lines", () => {
+    expect(parseSseDataLine(":")).toBeNull();
+    expect(parseSseDataLine("event: message")).toBeNull();
   });
 });
