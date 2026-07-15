@@ -68,6 +68,17 @@ class MainHelpersTest(unittest.TestCase):
         self.assertEqual(msgs[0].role.value, "user")
         self.assertEqual(msgs[1].content, "BANANA-42")
 
+    def test_safe_upload_filename(self) -> None:
+        self.assertEqual(main._safe_upload_filename("notes.md"), "notes.md")
+        self.assertEqual(
+            main._safe_upload_filename("../../etc/passwd.txt"), "passwd.txt"
+        )
+        self.assertEqual(
+            main._safe_upload_filename("My Notes!.md"), "My-Notes.md"
+        )
+        with self.assertRaises(main.HTTPException):
+            main._safe_upload_filename("image.png")
+
     def test_format_rag_sources(self) -> None:
         from llama_index.core.schema import NodeWithScore, TextNode
 

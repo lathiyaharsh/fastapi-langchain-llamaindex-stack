@@ -4,6 +4,7 @@
  * Modes:
  * - Chat → POST /api/chat (Groq via FastAPI when configured; Gemini/HF stay on Next)
  * - Ask My Docs → POST /api/rag (FastAPI LlamaIndex RAG)
+ * - Upload → POST /api/rag/upload (.md / .txt into backend/data)
  *
  * Flow:
  * 1. User types a message or clicks a suggestion
@@ -14,7 +15,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import MarkdownContent from "@/components/MarkdownContent";
 import type { AIProvider, ChatMessage, ChatMode } from "@/lib/ai/types";
 import { getProviderLabel } from "@/lib/ai/types";
@@ -233,7 +234,7 @@ function EmptyState({
         </h2>
         <p className="mt-1 text-sm text-[var(--color-text-muted)]">
           {isDocs
-            ? "Questions are answered from files in backend/data via FastAPI RAG."
+            ? "Questions are answered from files in backend/data. Upload .md or .txt to add more."
             : allowProviderSwitch
               ? "Choose an AI provider above and ask anything."
               : "Ask anything. Groq goes through FastAPI when configured; other providers stay on Next.js."}
@@ -426,6 +427,76 @@ function ReplyModeToggle({
   );
 }
 
+/** Upload a markdown/text doc into backend/data (rebuilds the RAG index). */
+function DocUploadButton({
+  disabled,
+  onUploaded,
+  onError,
+}: {
+  disabled?: boolean;
+  onUploaded: (filename: string, filesSeen: number) => void;
+  onError: (message: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || uploading) return;
+
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith(".md") && !lower.endsWith(".txt")) {
+      onError("Only .md and .txt files are allowed");
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/rag/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        filename?: string;
+        files_seen?: number;
+      };
+      if (!response.ok) {
+        throw new Error(data.error || "Upload failed");
+      }
+      onUploaded(data.filename ?? file.name, data.files_seen ?? 0);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".md,.txt,text/markdown,text/plain"
+        className="hidden"
+        onChange={handleChange}
+        disabled={disabled || uploading}
+      />
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        disabled={disabled || uploading}
+        className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-1.5 text-sm text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-primary)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {uploading ? "Uploading..." : "Upload doc"}
+      </button>
+    </>
+  );
+}
+
 /** Switch between general chat and Ask My Docs. */
 function ModeToggle({
   mode,
@@ -493,6 +564,7 @@ export default function FastApiChat() {
   const [conciseMode, setConciseMode] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [canRetry, setCanRetry] = useState(false);
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingStreamRef = useRef("");
@@ -619,6 +691,7 @@ export default function FastApiChat() {
     if (isLoading) return;
 
     setError(null);
+    setUploadNotice(null);
     setCanRetry(false);
     setIsLoading(true);
     setIsStreaming(false);
@@ -901,6 +974,21 @@ export default function FastApiChat() {
             onChange={handleModeChange}
             disabled={isLoading}
           />
+          {mode === "docs" && (
+            <DocUploadButton
+              disabled={isLoading}
+              onUploaded={(filename, filesSeen) => {
+                setUploadNotice(
+                  `Uploaded ${filename} — ${filesSeen} file(s) indexed. You can ask about it now.`
+                );
+                setError(null);
+              }}
+              onError={(message) => {
+                setUploadNotice(null);
+                setError(message);
+              }}
+            />
+          )}
           {mode === "chat" && (
             <ReplyModeToggle
               concise={conciseMode}
@@ -961,6 +1049,15 @@ export default function FastApiChat() {
               {showTypingIndicator && <TypingIndicator />}
               <div ref={messagesEndRef} />
             </div>
+          </div>
+        )}
+
+        {uploadNotice && mode === "docs" && (
+          <div
+            role="status"
+            className="mx-4 mb-2 rounded-[var(--radius-md)] border border-[var(--color-success)]/30 bg-[var(--color-success)]/10 px-4 py-3 text-sm text-[var(--color-success)] sm:mx-6"
+          >
+            {uploadNotice}
           </div>
         )}
 

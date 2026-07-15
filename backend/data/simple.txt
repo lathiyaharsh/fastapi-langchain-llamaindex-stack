@@ -1,0 +1,150 @@
+# Company Handbook
+
+## About the Company
+
+Acme Analytics is a software company that provides AI-powered business intelligence solutions. The company was founded in 2020 and its headquarters are located in Austin, Texas.
+
+## Mission
+
+Our mission is to help organizations make better decisions through trustworthy artificial intelligence.
+
+## Products
+
+### InsightAI
+- AI-powered analytics platform
+- Real-time dashboards
+- Predictive forecasting
+- Natural language querying
+
+### DataSync
+- ETL platform
+- Supports PostgreSQL, MySQL, Snowflake, and BigQuery
+- Incremental data synchronization
+- Scheduled pipelines
+
+### ReportGen
+- Automated report generation
+- PDF and Excel exports
+- Email scheduling
+- Custom templates
+
+## Office Hours
+
+| Department | Hours |
+|------------|-------|
+| Engineering | 9:00 AM - 6:00 PM |
+| Sales | 8:00 AM - 5:00 PM |
+| Customer Support | 24/7 |
+
+## Employee Benefits
+
+- Health insurance
+- Dental insurance
+- Vision insurance
+- 20 days paid vacation
+- Remote work up to 3 days per week
+- Annual learning budget of $2,000
+
+## Security Policies
+
+1. Employees must use multi-factor authentication.
+2. Passwords must contain at least 12 characters.
+3. Laptops must be encrypted.
+4. VPN is required for remote access.
+5. Security awareness training is mandatory every year.
+
+## API Information
+
+Base URL:
+```
+https://api.acmeanalytics.com/v1
+```
+
+Authentication:
+- Bearer Token
+- Token expiration: 24 hours
+
+Example Endpoint:
+
+```
+GET /customers
+```
+
+Returns a list of customers.
+
+## Pricing
+
+| Plan | Monthly Price | Users |
+|------|---------------|-------|
+| Starter | $29 | 5 |
+| Professional | $99 | 25 |
+| Enterprise | Contact Sales | Unlimited |
+
+## Frequently Asked Questions
+
+### How do I reset my password?
+
+Click **Forgot Password** on the login page and follow the instructions sent to your registered email.
+
+### How can I contact support?
+
+Email:
+support@acmeanalytics.com
+
+Phone:
++1-800-555-1234
+
+### Which databases are supported?
+
+- PostgreSQL
+- MySQL
+- Snowflake
+- BigQuery
+
+## Release Notes
+
+### Version 2.3
+
+- Added dashboard filters
+- Improved search performance by 35%
+- Fixed authentication timeout issue
+
+### Version 2.4
+
+- Added role-based access control
+- Introduced audit logs
+- Improved API response time
+
+## Team Structure
+
+Engineering
+- VP Engineering
+- Backend Team
+- Frontend Team
+- DevOps Team
+- QA Team
+
+Sales
+- Sales Director
+- Account Executives
+- Customer Success
+
+## Glossary
+
+**ETL**
+Extract, Transform, Load process for moving data.
+
+**RBAC**
+Role-Based Access Control.
+
+**MFA**
+Multi-Factor Authentication.
+
+## Contact
+
+Address:
+100 Innovation Drive,
+Austin, TX 78701
+
+Website:
+https://www.acmeanalytics.com

@@ -334,6 +334,62 @@ export async function askRagFromFastApi(options: {
   return { ok: true, data };
 }
 
+export type FastApiRagUploadResponse = {
+  status: string;
+  filename: string;
+  files_seen: number;
+  data_dir: string;
+};
+
+/** Upload a doc into backend/data and rebuild the RAG index. */
+export async function uploadRagDocumentFromFastApi(options: {
+  file: Blob;
+  filename: string;
+  signal?: AbortSignal;
+}): Promise<
+  | { ok: true; data: FastApiRagUploadResponse }
+  | { ok: false; error: string; status: number }
+> {
+  const base = getFastApiBaseUrl();
+  if (!base) {
+    return { ok: false, error: "FASTAPI_URL is not configured", status: 500 };
+  }
+
+  const formData = new FormData();
+  formData.append("file", options.file, options.filename);
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${base}/rag/upload`, {
+      method: "POST",
+      body: formData,
+      signal: options.signal,
+    });
+  } catch (error) {
+    console.error("FastAPI RAG upload failed:", error);
+    return { ok: false, error: GENERIC_UPSTREAM_ERROR, status: 502 };
+  }
+
+  if (!upstream.ok) {
+    return {
+      ok: false,
+      error: await parseFastApiError(upstream),
+      status: upstream.status,
+    };
+  }
+
+  const data = (await upstream.json()) as FastApiRagUploadResponse;
+  if (
+    typeof data.filename !== "string" ||
+    typeof data.files_seen !== "number" ||
+    typeof data.status !== "string"
+  ) {
+    return { ok: false, error: "Invalid upload response from FastAPI", status: 502 };
+  }
+
+  return { ok: true, data };
+}
+
 /** Clear FastAPI chat or RAG session memory. */
 export async function clearFastApiSession(
   kind: "chat" | "rag",

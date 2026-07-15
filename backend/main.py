@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Sequence
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
@@ -77,6 +77,9 @@ SUPABASE_COLLECTION = os.getenv("SUPABASE_COLLECTION", "ai_chat_docs")
 
 # Markdown files for RAG (lab-secret.md, project-notes.md, …)
 DATA_DIR = Path(__file__).parent / "data"
+
+ALLOWED_UPLOAD_SUFFIXES = {".md", ".txt"}
+MAX_UPLOAD_BYTES = int(os.getenv("RAG_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
 
 # SupabaseVectorStore scores are ~1-exp(-distance): lower = better match.
 # Only show source chunks within this gap of the best score (drops weak extras).
@@ -174,6 +177,54 @@ def _normalize_pg_url(url: str) -> str:
     user, password = userinfo.split(":", 1)
     password_enc = quote_plus(unquote(password))
     return f"{scheme}://{user}:{password_enc}@{hostpart}"
+
+
+def _safe_upload_filename(raw: str) -> str:
+    """Strip path components and allow only .md / .txt basenames."""
+    name = Path((raw or "upload").strip()).name
+    if not name or name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    suffix = Path(name).suffix.lower()
+    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+        allowed = ", ".join(sorted(ALLOWED_UPLOAD_SUFFIXES))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only {allowed} files are allowed",
+        )
+
+    stem = re.sub(r"[^\w\-]+", "-", Path(name).stem, flags=re.UNICODE).strip("-")
+    if not stem:
+        stem = "upload"
+    return f"{stem[:80]}{suffix}"
+
+
+def _save_upload_to_data_dir(file: UploadFile) -> Path:
+    """Write one uploaded document into DATA_DIR (overwrites same basename)."""
+    filename = _safe_upload_filename(file.filename or "upload.md")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    dest = DATA_DIR / filename
+
+    size = 0
+    chunks: list[bytes] = []
+    while True:
+        chunk = file.file.read(1024 * 64)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large (max {MAX_UPLOAD_BYTES // 1024} KB)",
+            )
+        chunks.append(chunk)
+
+    content = b"".join(chunks)
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    dest.write_bytes(content)
+    return dest
 
 
 def _configure_llm_and_embeddings() -> None:
@@ -542,6 +593,13 @@ class RagResponse(BaseModel):
     sources: list[str]  # relevant chunk previews (empty for greetings / chat-memory)
 
 
+class RagUploadResponse(BaseModel):
+    status: str
+    filename: str
+    files_seen: int
+    data_dir: str
+
+
 # =============================================================================
 # ROUTES — basic
 # =============================================================================
@@ -729,3 +787,32 @@ def rag_rebuild():
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Rebuild error: {exc}") from exc
+
+
+@app.post("/rag/upload", response_model=RagUploadResponse)
+def rag_upload(file: UploadFile = File(...)):
+    """
+    Upload a .md or .txt file into backend/data/ and rebuild the RAG index.
+
+    Sync (not async): rebuild uses LlamaIndex helpers that call asyncio.run()
+    internally — that fails if FastAPI's event loop is already running.
+
+    Same end result as manually dropping a file in data/ and calling /rag/rebuild.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    try:
+        saved = _save_upload_to_data_dir(file)
+        get_rag_index(force_rebuild=True)
+        file_count = len(list(DATA_DIR.glob("*"))) if DATA_DIR.exists() else 0
+        return RagUploadResponse(
+            status="uploaded",
+            filename=saved.name,
+            files_seen=file_count,
+            data_dir=str(DATA_DIR),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Upload error: {exc}") from exc
