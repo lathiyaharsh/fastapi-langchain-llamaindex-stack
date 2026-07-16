@@ -142,7 +142,7 @@ Key difference: with `create_agent`, you pass `{"messages": [...]}` and read the
 
 - [x] Can explain: LangChain = orchestration / agents / tools
 - [x] Can explain: LlamaIndex = data ingestion / retrieval / RAG
-- [ ] Build one flow that uses **LlamaIndex for retrieval** and **LangChain (or plain LLM) for answering**
+- [x] Build one flow that uses **LlamaIndex for retrieval** and **LangChain (or plain LLM) for answering**
 - [x] Document in notes: which library you prefer for which task
 
 ### Your notes (filled in during learning)
@@ -152,7 +152,7 @@ Key difference: with `create_agent`, you pass `{"messages": [...]}` and read the
 | Chat API, memory, streaming, tools/agents | **LangChain** (what `/chat` uses) |
 | Load docs, embed, search, grounded Q&A | **LlamaIndex** (what `/rag` uses) |
 | FastAPI | HTTP layer for both |
-| Later hybrid | LlamaIndex retrieves chunks → LangChain/LLM writes the answer |
+| Hybrid compare path | LlamaIndex retrieves chunks → LangChain/LLM writes the answer (`/rag-hybrid`) |
 
 **When to use `create_agent` vs manual loop**
 
@@ -166,6 +166,13 @@ Key difference: with `create_agent`, you pass `{"messages": [...]}` and read the
 **RAG chat engine choice:** `CONDENSE_QUESTION` only uses retrieved docs in the final answer — fine for doc Q&A, bad for “what is my name?” after an intro. **`CONDENSE_PLUS_CONTEXT`** condenses follow-ups for retrieval *and* passes chat history into the final prompt.
 
 **Supabase score gotcha:** `SupabaseVectorStore` scores are `~1 - exp(-distance)` (lower = better). Do **not** use `SimilarityPostprocessor` with a “min similarity” cutoff — it drops the best matches and returns `Empty Response`.
+
+**Now you have both RAG styles to compare**
+
+| Endpoint | Retrieval | Answer orchestration | Good for learning |
+| --- | --- | --- | --- |
+| `/rag` | LlamaIndex | LlamaIndex chat engine + Groq | End-to-end RAG with less code |
+| `/rag-hybrid` | LlamaIndex retriever | LangChain/Groq prompt + answer | Clear split: retrieve with one library, answer with another |
 
 ---
 
@@ -197,6 +204,8 @@ Key difference: with `create_agent`, you pass `{"messages": [...]}` and read the
 | Streamed text had no spaces (`Thecurrentweather…`) | BFF `parseSseDataLine` — do not `.trim()` SSE payloads; spaces are real tokens |
 | Tool questions: blank bubble ~2s before first token | Expected — Groq tool round + Open-Meteo before final answer streams |
 | Compare agent vs manual tool loop | `/chat` = `create_agent`; `/chat/stream` = manual loop; UI still uses stream only |
+| `main.py` getting too large | Added `backend/rag_hybrid.py` for the new hybrid compare endpoint |
+| Hybrid flow was harder to follow than `/rag` | Added learning comments in `backend/rag_hybrid.py` for memory, condense, retrieve, and answer steps |
 
 ---
 
@@ -392,16 +401,17 @@ Flow in this project: `SimpleDirectoryReader` → `VectorStoreIndex.from_documen
 | 2026-07-15 | Comment pass on `backend/main.py` | Documented tool loop, streaming delay, history sync |
 | 2026-07-16 | Split chat tool paths: `/chat` = `create_agent`, `/chat/stream` = manual loop | Same `get_weather` tool; compare via Swagger vs UI; `invoke_chat_with_tools` kept for tests |
 | 2026-07-16 | Concepts deep-dive: prompt template vs system prompt, tokens/context, chunking | Mapped each concept to `main.py` — system prompt, `RAG_CONTEXT_PROMPT`, `remember()` trim, default LlamaIndex splitter |
+| 2026-07-16 | Built `/rag-hybrid` in new `backend/rag_hybrid.py` module | LlamaIndex retrieves chunks; LangChain/Groq answers; includes `retrieval_query` for debugging |
 
 ---
 
 ## Current focus
 
-> **Done:** Concepts checklist complete. `/chat` = `create_agent`; `/chat/stream` = manual loop.
+> **Done:** Concepts checklist complete. `/chat` = `create_agent`; `/chat/stream` = manual loop. `/rag` and `/rag-hybrid` now show two different RAG orchestration styles.
 
 **Next options**
 
-1. **Hybrid RAG (Phase 4)** — LlamaIndex retrieve → LangChain/Groq answer in one flow
-2. **Optional UI toggle** — call `POST /chat` from the browser to try `create_agent` without Swagger
+1. **Test and compare RAG styles** — same question to `/rag` and `/rag-hybrid`, inspect `sources` and `retrieval_query`
+2. **Optional UI toggle** — call `POST /chat` or `/rag-hybrid` from the browser without Swagger
 3. **Chunking experiment** — explicit `SentenceSplitter` + compare RAG quality on your `data/` files
 4. **Phase 6** — logging, rate limits, LLM timeouts (when you want production polish)

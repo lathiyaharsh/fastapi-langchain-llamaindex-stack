@@ -75,6 +75,8 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 | `POST` | `/chat/stream` | SSE token stream (used by the web UI) |
 | `DELETE` | `/chat/session/{id}` | Clear in-memory chat history |
 | `POST` | `/rag` | Document Q&A |
+| `POST` | `/rag-hybrid` | LlamaIndex retrieve + LangChain/Groq answer |
+| `DELETE` | `/rag-hybrid/session/{id}` | Clear hybrid RAG chat history |
 | `POST` | `/rag/upload` | Upload `.md` / `.txt` (incremental insert) |
 | `POST` | `/rag/rebuild` | Re-embed everything in `data/` |
 | `DELETE` | `/rag/session/{id}` | Clear RAG conversation (keeps vectors) |
@@ -90,6 +92,8 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 - Vectors live in **Supabase Postgres (pgvector)**, not only in memory.
 - Source files live in `backend/data/`. After editing them, call `POST /rag/rebuild`.
 - Upload accepts `.md` / `.txt` only; duplicate filenames return `409`.
+- `/rag` = LlamaIndex chat engine end-to-end (`CONDENSE_PLUS_CONTEXT`).
+- `/rag-hybrid` = LlamaIndex retrieval only, then LangChain/Groq writes the final answer. Response also includes `retrieval_query` so you can inspect what got sent to retrieval.
 
 ## Vector store: Supabase + pgvector
 

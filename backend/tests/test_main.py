@@ -11,18 +11,22 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
 
 import main
+import rag_hybrid
 
 
 class MainHelpersTest(unittest.TestCase):
     def setUp(self) -> None:
         main.chat_sessions.clear()
         main.rag_sessions.clear()
+        rag_hybrid.hybrid_rag_sessions.clear()
 
     def tearDown(self) -> None:
         main.chat_sessions.clear()
         main.rag_sessions.clear()
+        rag_hybrid.hybrid_rag_sessions.clear()
 
     def test_fetch_weather_formats_response(self) -> None:
         geo_response = MagicMock()
@@ -209,6 +213,15 @@ class MainHelpersTest(unittest.TestCase):
         ]
         self.assertEqual(len(main._format_rag_sources(close)), 2)
 
+    def test_hybrid_session_sync_replaces_history(self) -> None:
+        history = [
+            rag_hybrid.HistoryMessage(role="user", content="Hi"),
+            rag_hybrid.HistoryMessage(role="assistant", content="Hello"),
+        ]
+        messages = rag_hybrid.sync_hybrid_session_history("hy-1", history)
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(len(rag_hybrid.hybrid_rag_sessions["hy-1"]), 2)
+
 
 class MainRoutesTest(unittest.TestCase):
     client: TestClient
@@ -216,11 +229,13 @@ class MainRoutesTest(unittest.TestCase):
     def setUp(self) -> None:
         main.chat_sessions.clear()
         main.rag_sessions.clear()
+        rag_hybrid.hybrid_rag_sessions.clear()
         self.client = TestClient(main.app)
 
     def tearDown(self) -> None:
         main.chat_sessions.clear()
         main.rag_sessions.clear()
+        rag_hybrid.hybrid_rag_sessions.clear()
 
     def test_health(self) -> None:
         response = self.client.get("/health")
@@ -232,6 +247,10 @@ class MainRoutesTest(unittest.TestCase):
         self.assertEqual(data["chat_tools"], ["get_weather"])
         self.assertEqual(data["chat_nonstream"], "create_agent")
         self.assertEqual(data["chat_stream"], "manual_bind_tools_loop")
+        self.assertEqual(data["rag_default"], "llamaindex_chat_engine")
+        self.assertEqual(
+            data["rag_hybrid"], "llamaindex_retriever_plus_langchain_answer"
+        )
 
     def test_clear_chat_session(self) -> None:
         main.chat_sessions["abc"] = []
@@ -246,6 +265,58 @@ class MainRoutesTest(unittest.TestCase):
         response = self.client.delete("/rag/session/docs")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("docs", main.rag_sessions)
+
+    def test_clear_hybrid_rag_session(self) -> None:
+        rag_hybrid.hybrid_rag_sessions["docs-h"] = [AIMessage(content="cached")]
+        response = self.client.delete("/rag-hybrid/session/docs-h")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("docs-h", rag_hybrid.hybrid_rag_sessions)
+
+    def test_rag_hybrid(self) -> None:
+        from llama_index.core.schema import NodeWithScore, TextNode
+
+        class FakeRetriever:
+            def retrieve(self, query: str) -> list[NodeWithScore]:
+                self.query = query
+                return [
+                    NodeWithScore(
+                        node=TextNode(text="The fridge password is BANANA-42."),
+                        score=0.18,
+                    )
+                ]
+
+        class FakeIndex:
+            def __init__(self) -> None:
+                self.retriever = FakeRetriever()
+
+            def as_retriever(self, similarity_top_k: int = 3) -> FakeRetriever:
+                self.top_k = similarity_top_k
+                return self.retriever
+
+        class FakeModel:
+            def invoke(self, messages: list[object]) -> AIMessage:
+                return AIMessage(content="The fridge password is BANANA-42.")
+
+        fake_model = FakeModel()
+        fake_index = FakeIndex()
+        with (
+            patch.object(main, "get_rag_index", return_value=fake_index),
+            patch.object(main, "get_model", return_value=fake_model),
+        ):
+            response = self.client.post(
+                "/rag-hybrid",
+                json={"question": "What is the fridge password?"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["answer"], "The fridge password is BANANA-42.")
+        self.assertEqual(data["retrieval_query"], "What is the fridge password?")
+        self.assertEqual(fake_index.top_k, 3)
+        self.assertEqual(
+            fake_index.retriever.query, "What is the fridge password?"
+        )
+        self.assertEqual(len(data["sources"]), 1)
 
     def test_upload_inserts_only_new_document(self) -> None:
         uploaded = main.DATA_DIR / "incremental-test.md"

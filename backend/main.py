@@ -42,6 +42,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
+from rag_hybrid import create_rag_hybrid_router, hybrid_rag_sessions
 
 # --- LangChain: orchestrates chat, prompts, memory, tools ---
 from langchain_groq import ChatGroq
@@ -869,6 +870,13 @@ def remember(session_id: str, human: str, ai: str) -> None:
 # FASTAPI APP
 # =============================================================================
 app = FastAPI(title="AI Chat Learning Backend")
+app.include_router(
+    create_rag_hybrid_router(
+        get_rag_index=lambda: get_rag_index(),
+        get_model=lambda: get_model(),
+        format_sources=lambda nodes: _format_rag_sources(nodes),
+    )
+)
 
 # Allow browser calls from Next.js dev server (direct FastAPI testing / CORS)
 app.add_middleware(
@@ -952,6 +960,8 @@ def health():
         "chat_tools": [item.name for item in CHAT_TOOLS],
         "chat_nonstream": "create_agent",
         "chat_stream": "manual_bind_tools_loop",
+        "rag_default": "llamaindex_chat_engine",
+        "rag_hybrid": "llamaindex_retriever_plus_langchain_answer",
     }
 
 
