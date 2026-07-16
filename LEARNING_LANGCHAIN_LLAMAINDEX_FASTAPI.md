@@ -377,7 +377,46 @@ Flow in this project: `SimpleDirectoryReader` → `VectorStoreIndex.from_documen
 - [x] LangChain **Tool calling** — https://docs.langchain.com/oss/python/langchain/tool-calling (optional deepen)
 - [x] LlamaIndex **Introduction to RAG** — https://docs.llamaindex.ai/en/stable/understanding/rag/
 - [ ] LlamaIndex chat engines / vector stores — explore from Understanding hub
+- [x] Neural Networks beginner guide — https://www.geeksforgeeks.org/deep-learning/neural-networks-a-beginners-guide/
 - [ ] Your notes / blog / loom links: _add here_
+
+---
+
+## ML fundamentals notes (from GFG beginner guide)
+
+**Neural network in one line:** layers of connected neurons that learn patterns from data by adjusting **weights** and **biases** — not by hard-coded `if` rules.
+
+**Building blocks learned**
+
+| Piece | Meaning |
+| --- | --- |
+| Neuron | Takes inputs → weighted sum + bias → activation → output |
+| Weights / biases | Learnable knobs that control how strong each connection is |
+| Input → Hidden → Output layers | Data in → feature processing → prediction / text / label out |
+| Forward propagation | Data flows input → output to make a prediction |
+| Loss | How wrong the prediction was |
+| Backpropagation | Compute gradients; update weights to reduce loss |
+| Activation (ReLU, sigmoid, tanh) | Adds non-linearity so the net can learn complex patterns |
+
+**Types to remember later**
+
+| Type | Typical use |
+| --- | --- |
+| Feedforward / MLP | Tabular / simple classification |
+| CNN | Images |
+| RNN / LSTM | Sequences (older NLP) |
+| Transformers | Modern NLP / LLMs (what Groq models are based on) |
+
+**How this maps to your FastAPI stack**
+
+| In the guide | In your project |
+| --- | --- |
+| Network learns patterns from data | Groq LLM already trained; you call it via LangChain |
+| Forward pass → output | Prompt in → tokens / answer out (`/chat`, `/rag`, `/rag-hybrid`) |
+| Feature vector example (email spam) | Embedding model turns text into a vector for Supabase search |
+| Supervised learning idea | Embeddings + RAG use pretrained models; you don't train from scratch here |
+
+You are **using** neural nets (LLM + embeddings), not training them in this repo — still useful to know what sits under Groq / HF.
 
 ---
 
@@ -402,16 +441,19 @@ Flow in this project: `SimpleDirectoryReader` → `VectorStoreIndex.from_documen
 | 2026-07-16 | Split chat tool paths: `/chat` = `create_agent`, `/chat/stream` = manual loop | Same `get_weather` tool; compare via Swagger vs UI; `invoke_chat_with_tools` kept for tests |
 | 2026-07-16 | Concepts deep-dive: prompt template vs system prompt, tokens/context, chunking | Mapped each concept to `main.py` — system prompt, `RAG_CONTEXT_PROMPT`, `remember()` trim, default LlamaIndex splitter |
 | 2026-07-16 | Built `/rag-hybrid` in new `backend/rag_hybrid.py` module | LlamaIndex retrieves chunks; LangChain/Groq answers; includes `retrieval_query` for debugging |
+| 2026-07-16 | Commented `backend/rag_hybrid.py` | Top-to-bottom notes: memory → condense → retrieve → answer |
+| 2026-07-16 | Neural networks beginner guide (GFG) | Neurons, layers, forward/backprop, activations; mapped to Groq LLM + HF embeddings in this stack |
 
 ---
 
 ## Current focus
 
-> **Done:** Concepts checklist complete. `/chat` = `create_agent`; `/chat/stream` = manual loop. `/rag` and `/rag-hybrid` now show two different RAG orchestration styles.
+> **Done:** Concepts checklist + hybrid RAG + NN beginner basics. `/chat` = `create_agent`; `/chat/stream` = manual loop; `/rag` vs `/rag-hybrid` for RAG styles.
 
 **Next options**
 
 1. **Test and compare RAG styles** — same question to `/rag` and `/rag-hybrid`, inspect `sources` and `retrieval_query`
-2. **Optional UI toggle** — call `POST /chat` or `/rag-hybrid` from the browser without Swagger
-3. **Chunking experiment** — explicit `SentenceSplitter` + compare RAG quality on your `data/` files
-4. **Phase 6** — logging, rate limits, LLM timeouts (when you want production polish)
+2. **Deepen ML fundamentals** — embeddings / transformers / tokens (how LLMs generate text)
+3. **Optional UI toggle** — call `POST /chat` or `/rag-hybrid` from the browser without Swagger
+4. **Chunking experiment** — explicit `SentenceSplitter` + compare RAG quality on your `data/` files
+5. **Phase 6** — logging, rate limits, LLM timeouts (when you want production polish)
