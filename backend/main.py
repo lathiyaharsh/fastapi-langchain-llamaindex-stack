@@ -8,9 +8,8 @@ What this file does:
 
 Request flow (high level):
   Chat mode:
-    POST /chat/stream → build_messages → astream_chat_with_tools
-      → Groq may call get_weather → Open-Meteo → Groq writes final answer
-      → SSE tokens to Next.js BFF → UI
+    POST /chat        → create_agent (automatic tool loop)
+    POST /chat/stream → manual bind_tools loop → SSE tokens to Next.js BFF → UI
 
   Docs mode:
     POST /rag → sync_rag_session_history → chat_engine.chat
@@ -34,7 +33,7 @@ import re
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence, cast
 
 import httpx
 
@@ -54,6 +53,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.tools import tool
+from langchain.agents import create_agent
 
 # --- LlamaIndex: load docs → embed → search → answer (RAG) ---
 from llama_index.core import (
@@ -608,9 +608,48 @@ def get_model_with_tools() -> ChatGroq:
     return get_model().bind_tools(CHAT_TOOLS)  # type: ignore[return-value]
 
 
+def chat_system_prompt(reply_mode: str = "concise") -> str:
+    """System instructions shared by /chat (agent) and /chat/stream (manual loop)."""
+    style = (
+        "Keep answers short (1–3 sentences)."
+        if reply_mode == "concise"
+        else "Give a thorough, well-structured answer with useful detail."
+    )
+    return (
+        "You are a helpful assistant with a weather tool. "
+        "Use get_weather for current conditions instead of guessing. "
+        f"{style}"
+    )
+
+
+def get_chat_agent(reply_mode: str = "concise"):
+    """
+    LangChain create_agent graph for POST /chat (non-streaming).
+
+    Same tools as the manual loop, but LangGraph runs the tool-calling
+    loop for you — useful to compare with invoke_chat_with_tools / astream.
+    """
+    return create_agent(
+        get_model(),
+        tools=CHAT_TOOLS,
+        system_prompt=chat_system_prompt(reply_mode),
+    )
+
+
 def _ai_text(message: AIMessage) -> str:
     content = message.content
     return content if isinstance(content, str) else str(content)
+
+
+def _final_ai_text(messages: list[BaseMessage]) -> str:
+    """Last AIMessage content from an agent result message list."""
+    for message in reversed(messages):
+        if isinstance(message, AIMessage) and not message.tool_calls:
+            return _ai_text(message)
+    for message in reversed(messages):
+        if isinstance(message, AIMessage):
+            return _ai_text(message)
+    return ""
 
 
 def _run_tool_call(tool_call: object) -> str:
@@ -636,12 +675,30 @@ def _tool_call_id(tool_call: object) -> str:
     return str(getattr(tool_call, "id", ""))
 
 
+def invoke_chat_with_agent(
+    session_id: str, message: str, reply_mode: str = "concise"
+) -> str:
+    """
+    POST /chat path: LangChain create_agent (automatic tool loop).
+
+    Pass only prior turns + the new human message. System prompt is set on
+    the agent itself (not duplicated as SystemMessage in the list).
+    """
+    history = chat_sessions.setdefault(session_id, [])
+    agent = get_chat_agent(reply_mode)
+    result = agent.invoke(
+        cast(Any, {"messages": [*history, HumanMessage(content=message)]})
+    )
+    messages = result.get("messages", []) if isinstance(result, dict) else []
+    return _final_ai_text(list(messages))
+
+
 def invoke_chat_with_tools(messages: list[BaseMessage]) -> str:
     """
-    Tool-calling loop for POST /chat (non-streaming).
+    Manual tool-calling loop (learning contrast to create_agent).
 
-    Repeat until Groq returns plain text (no tool_calls) or we hit the round cap:
-      AIMessage(tool_calls=[...]) → run tools → ToolMessage → invoke again
+    Used by tests / optional non-stream experiments. Production /chat uses
+    invoke_chat_with_agent; /chat/stream uses astream_chat_with_tools.
     """
     model = get_model_with_tools()
     conversation = list(messages)
@@ -786,25 +843,14 @@ def build_messages(
     session_id: str, message: str, reply_mode: str = "concise"
 ) -> list[BaseMessage]:
     """
-    Build the message list Groq receives:
+    Build the message list Groq receives for /chat/stream (manual tool loop):
       [SystemMessage] + past turns + new HumanMessage
 
     reply_mode mirrors Next.js Concise / Detailed toggle.
     """
     history = chat_sessions.setdefault(session_id, [])
-    style = (
-        "Keep answers short (1–3 sentences)."
-        if reply_mode == "concise"
-        else "Give a thorough, well-structured answer with useful detail."
-    )
     return [
-        SystemMessage(
-            content=(
-                "You are a helpful assistant with a weather tool. "
-                "Use get_weather for current conditions instead of guessing. "
-                f"{style}"
-            )
-        ),
+        SystemMessage(content=chat_system_prompt(reply_mode)),
         *history,
         HumanMessage(content=message),
     ]
@@ -904,11 +950,17 @@ def health():
         "hf_embed_model": HF_EMBED_MODEL,
         "supabase_collection": SUPABASE_COLLECTION,
         "chat_tools": [item.name for item in CHAT_TOOLS],
+        "chat_nonstream": "create_agent",
+        "chat_stream": "manual_bind_tools_loop",
     }
 
 
 # =============================================================================
 # ROUTES — chat (LangChain)
+#
+# Learning split (same tools, two harnesses):
+#   POST /chat        → create_agent (automatic tool loop)
+#   POST /chat/stream → manual bind_tools + astream loop (UI uses this)
 #
 # Next.js calls POST /api/chat → proxies here as POST /chat/stream.
 # FastAPI sends plain-text SSE; the Next BFF translates to JSON events.
@@ -922,15 +974,21 @@ SSE_HEADERS = {
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
-    """Full reply in one JSON response (invoke = wait for complete answer)."""
+    """
+    Full reply in one JSON response via LangChain create_agent.
+
+    Compare with /chat/stream, which uses the manual tool-calling loop instead.
+    Try in Swagger /docs: POST /chat {"message": "What's the weather in London?"}
+    """
     message = request.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
     try:
         sync_session_history(request.session_id, request.history)
-        messages = build_messages(request.session_id, message, request.reply_mode)
-        reply = invoke_chat_with_tools(messages)
+        reply = invoke_chat_with_agent(
+            request.session_id, message, request.reply_mode
+        )
         remember(request.session_id, message, reply)
     except HTTPException:
         raise
@@ -943,7 +1001,7 @@ def chat(request: ChatRequest):
 @app.post("/chat/stream")
 async def chat_stream(request: Request, body: ChatRequest):
     """
-    Stream tokens over SSE as Groq generates them.
+    Stream tokens over SSE via the *manual* tool loop (not create_agent).
 
     Wire format (one event per line):
       data: Hello\\n\\n

@@ -16,7 +16,7 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 
 | UI mode | Next.js | FastAPI | LLM stack | Tools |
 | --- | --- | --- | --- | --- |
-| Chat | `POST /api/chat` | `POST /chat/stream` | LangChain + Groq | `get_weather` |
+| Chat | `POST /api/chat` | `POST /chat/stream` (manual loop) · `POST /chat` (create_agent) | LangChain + Groq | `get_weather` |
 | Ask My Docs | `POST /api/rag` | `POST /rag` | LlamaIndex + Groq | none |
 | Upload doc | `POST /api/rag/upload` | `POST /rag/upload` | LlamaIndex embed | none |
 
@@ -86,19 +86,33 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 - [x] Run a basic agent / tool-calling loop once
 - [x] Expose a FastAPI endpoint that uses the tool-aware chain
 - [x] Understand when *not* to use an agent (simple Q&A vs multi-step)
+- [x] Compare **`create_agent`** (automatic loop) vs **manual `bind_tools` loop** on two endpoints
 
 **Current tool:** `get_weather(location)` on **Chat** only (`/chat`, `/chat/stream`) — not on `/rag`.
 
 How Groq “knows” about the tool (every request):
 
 1. `@tool` on `get_weather` → name, description, `location: str` schema
-2. `get_model().bind_tools([get_weather])` → LangChain sends a `tools` JSON block to Groq
+2. Tools are registered either via **`create_agent(..., tools=...)`** (`/chat`) or **`bind_tools([get_weather])`** (`/chat/stream`)
 3. System prompt nudges: “use get_weather for current conditions”
 4. Groq may reply with `tool_calls` (not text) → backend runs `fetch_weather()` → Open-Meteo
 5. Backend sends `ToolMessage` with result → Groq writes the final natural-language answer
 
-Tool loop lives in `invoke_chat_with_tools()` (non-stream) and `astream_chat_with_tools()` (stream).
-Max 5 rounds (`MAX_CHAT_TOOL_ROUNDS`) to prevent infinite tool loops.
+### Two tool-loop patterns (intentional split for learning)
+
+| Endpoint | Pattern | Main code | Who runs the loop? |
+| --- | --- | --- | --- |
+| `POST /chat` | **`create_agent`** | `get_chat_agent()` → `invoke_chat_with_agent()` | LangChain / LangGraph (automatic) |
+| `POST /chat/stream` | **Manual `bind_tools`** | `build_messages()` → `astream_chat_with_tools()` | You (explicit `for` loop, max 5 rounds) |
+| Tests only | Manual non-stream | `invoke_chat_with_tools()` | Same as stream, but `invoke` not `astream` |
+
+**Try `create_agent`:** Swagger `/docs` → `POST /chat` with `{"message": "What's the weather in Helsinki?"}`.
+
+**Try manual loop:** Web UI (Chat mode) → Next.js `POST /api/chat` → FastAPI `POST /chat/stream`. Same weather question; ~1–2s blank bubble before first token is normal (tool round + Open-Meteo).
+
+**`GET /health`** reports `chat_nonstream: create_agent` and `chat_stream: manual_bind_tools_loop`.
+
+Key difference: with `create_agent`, you pass `{"messages": [...]}` and read the final `AIMessage` from the result. With the manual loop, you watch `tool_calls` on each `AIMessage`, call `_run_tool_call()`, append `ToolMessage`, and repeat until Groq returns text (or you hit `MAX_CHAT_TOOL_ROUNDS`).
 
 **Streaming UX:** tool round + Open-Meteo HTTP (~1–2s) happens before first visible token — empty bubble + cursor is normal.
 
@@ -140,6 +154,15 @@ Max 5 rounds (`MAX_CHAT_TOOL_ROUNDS`) to prevent infinite tool loops.
 | FastAPI | HTTP layer for both |
 | Later hybrid | LlamaIndex retrieves chunks → LangChain/LLM writes the answer |
 
+**When to use `create_agent` vs manual loop**
+
+| Situation | Prefer |
+| --- | --- |
+| Learning how tool calling works step-by-step | Manual `bind_tools` loop (`/chat/stream`) |
+| Production non-stream JSON reply, less boilerplate | `create_agent` (`/chat`) |
+| SSE token streaming with tools | Manual loop today (agent streaming is a separate API surface) |
+| Unit tests for loop logic | `invoke_chat_with_tools()` (kept alongside agent path) |
+
 **RAG chat engine choice:** `CONDENSE_QUESTION` only uses retrieved docs in the final answer — fine for doc Q&A, bad for “what is my name?” after an intro. **`CONDENSE_PLUS_CONTEXT`** condenses follow-ups for retrieval *and* passes chat history into the final prompt.
 
 **Supabase score gotcha:** `SupabaseVectorStore` scores are `~1 - exp(-distance)` (lower = better). Do **not** use `SimilarityPostprocessor` with a “min similarity” cutoff — it drops the best matches and returns `Empty Response`.
@@ -173,6 +196,7 @@ Max 5 rounds (`MAX_CHAT_TOOL_ROUNDS`) to prevent infinite tool loops.
 | Sources panel cluttered Docs UI | Removed Sources UI in `FastApiChat.tsx`; API still returns `sources` for curl/Swagger |
 | Streamed text had no spaces (`Thecurrentweather…`) | BFF `parseSseDataLine` — do not `.trim()` SSE payloads; spaces are real tokens |
 | Tool questions: blank bubble ~2s before first token | Expected — Groq tool round + Open-Meteo before final answer streams |
+| Compare agent vs manual tool loop | `/chat` = `create_agent`; `/chat/stream` = manual loop; UI still uses stream only |
 
 ---
 
@@ -188,7 +212,7 @@ Max 5 rounds (`MAX_CHAT_TOOL_ROUNDS`) to prevent infinite tool loops.
 - [x] Configure Pyright/basedpyright to use `backend/.venv` (fixes “import could not be resolved”)
 - [ ] (Optional) Dockerize the FastAPI service
 
-> Note: Next.js rate-limits at `/api/*`. FastAPI errors are sanitized for chat/RAG streams. Backend `unittest` covers health, history sync, weather tool, tool loop, source filtering, session clear, URL normalize, upload.
+> Note: Next.js rate-limits at `/api/*`. FastAPI errors are sanitized for chat/RAG streams. Backend `unittest` covers health, history sync, weather tool, **`invoke_chat_with_agent`**, manual tool loop, source filtering, session clear, URL normalize, upload.
 
 ---
 
@@ -204,25 +228,146 @@ Max 5 rounds (`MAX_CHAT_TOOL_ROUNDS`) to prevent infinite tool loops.
 
 ## Concepts checklist (can you explain each?)
 
-- [ ] Prompt template vs system prompt
-- [ ] Tokens and context window
+- [x] Prompt template vs system prompt
+- [x] Tokens and context window
 - [x] Streaming vs non-streaming
 - [x] Embeddings and vector similarity
-- [ ] Chunking trade-offs
+- [x] Chunking trade-offs
 - [x] Hallucination vs grounded RAG answers
 - [x] Tool calling / function calling (`bind_tools`, `ToolMessage`, tool loop)
-- [x] Agents vs plain chains (we use a manual tool loop, not LangGraph agent)
+- [x] Agents vs plain chains (`/chat` = `create_agent`; `/chat/stream` = manual tool loop)
 - [x] Sync vs async FastAPI endpoints (`/rag/upload` is sync `def` — LlamaIndex + event loop conflict if `async`)
 - [x] Why keep secrets server-side only
 - [x] Client `history` vs server session memory (who is source of truth?)
 
 ---
 
+## Concepts deep-dive
+
+### 1. Prompt template vs system prompt
+
+Both shape what the model does, but at different layers.
+
+| Concept | What it is | In this project |
+| --- | --- | --- |
+| **System prompt** | Standing instructions for the whole conversation — role, rules, tone | `chat_system_prompt()` → passed to `create_agent(..., system_prompt=...)` on `/chat`, or as a `SystemMessage` in `build_messages()` on `/chat/stream` |
+| **Prompt template** | A reusable pattern with **slots** you fill per request | `RAG_CONTEXT_PROMPT` — LlamaIndex fills `{context_str}` with retrieved chunks; `reply_mode` fills concise vs detailed style in chat |
+
+**Mental model**
+
+- **System prompt** = “who you are and how to behave” (stable across turns)
+- **Prompt template** = “this turn’s layout” (variables change each call)
+
+**Two chat paths, same system text, different wiring**
+
+```
+/chat (create_agent):
+  system_prompt on agent  +  messages = [history, HumanMessage]
+
+/chat/stream (manual loop):
+  messages = [SystemMessage(system_prompt), *history, HumanMessage]
+```
+
+**RAG uses a template, not a separate system message**
+
+`RAG_CONTEXT_PROMPT` is a `context_prompt` for `CONDENSE_PLUS_CONTEXT`. LlamaIndex builds the final prompt roughly as:
+
+```
+[condensed question for retrieval]
++ retrieved chunks → {context_str}
++ chat history
++ user question
+```
+
+So chat = LangChain message types; RAG = LlamaIndex template with `{context_str}`.
+
+**Rule of thumb:** put durable rules in the system prompt / template header; put turn-specific content in human messages or template variables.
+
+---
+
+### 2. Tokens and context window
+
+A **token** is a small piece of text the model reads and writes (not always a whole word — `"ing"` might be one token).
+
+The **context window** is the max tokens in one API call: everything you send **in** plus everything the model generates **out**.
+
+**What counts toward context in this stack**
+
+| Piece | Endpoint | Notes |
+| --- | --- | --- |
+| System prompt | `/chat`, `/chat/stream` | Weather rules + concise/detailed style |
+| Tool schemas | `/chat`, `/chat/stream` | `get_weather` name, description, args — sent every request |
+| Chat history | `/chat`, `/chat/stream` | Capped at **last 20 messages** in `remember()` |
+| User message | all | Up to 8000 chars (Pydantic limit) |
+| Retrieved chunks | `/rag` | `similarity_top_k=3` chunks in `RAG_CONTEXT_PROMPT` |
+| Tool round-trip | `/chat` | Extra `AIMessage` (tool_calls) + `ToolMessage` before final answer |
+
+**Why Groq usage can look high (~100k+ input over a session)**
+
+- Every turn resends full history + system + tools
+- RAG adds embedded chunk text to the prompt
+- Tool calls add messages the user never sees
+- Long “Detailed” replies cost more output tokens
+
+**What we already do to stay in bounds**
+
+- `remember()` trims to 20 messages (~10 turns)
+- `similarity_top_k=3` limits RAG context
+- Concise mode nudges shorter answers
+
+**If context overflows:** older turns get dropped (chat trim) or the provider returns an error. Mitigations: summarize old history, lower `top_k`, smaller chunks, or a model with a larger window.
+
+---
+
+### 3. Chunking trade-offs
+
+**Chunking** = splitting documents into smaller pieces before embedding and storing in the vector DB.
+
+Flow in this project: `SimpleDirectoryReader` → `VectorStoreIndex.from_documents()` → LlamaIndex default splitter → HF embeddings → Supabase pgvector → retrieve top-k at query time.
+
+**Why chunk at all?**
+
+- Embeddings work best on focused passages, not whole files
+- Retrieval returns only relevant pieces, not entire docs
+- Fits more diverse sources into the context window
+
+**Trade-offs**
+
+| Smaller chunks | Larger chunks |
+| --- | --- |
+| More precise retrieval for narrow facts | More surrounding context per hit |
+| Risk: answer needs info split across chunks | Risk: irrelevant filler dilutes the prompt |
+| More rows in Supabase | Fewer rows, cheaper storage |
+
+**Knobs in this project (today vs future)**
+
+| Knob | Current value | Effect |
+| --- | --- | --- |
+| LlamaIndex default splitter | implicit in `from_documents()` | ~1024-token chunks, small overlap (library default) |
+| `similarity_top_k` | `3` | How many chunks enter `RAG_CONTEXT_PROMPT` |
+| `RAG_SOURCE_SCORE_GAP` | `0.08` | Filters weak source previews in API response |
+| `HF_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding quality vs speed/cost |
+
+**Symptoms and fixes**
+
+| Symptom | Likely cause | Try |
+| --- | --- | --- |
+| “I don’t know” but answer is in the doc | Chunk boundary split the fact | Smaller chunks + overlap, or merge related sections before ingest |
+| Wrong / vague RAG answers | Chunk too big or weak retrieval | Lower chunk size, raise `top_k` slightly, tune score gap |
+| Irrelevant doc snippets in `sources` | Broad chunk retrieved | Tighter chunks, lower `top_k`, stricter score gap |
+
+**Chunking is not one-size-fits-all** — tune for your doc shape (short notes vs long manuals). For learning, defaults are fine; Phase 4 hybrid RAG is a good place to experiment with explicit `SentenceSplitter(chunk_size=..., chunk_overlap=...)`.
+
+---
+
 ## Resources (fill in as you use them)
 
 - [ ] FastAPI docs — https://fastapi.tiangolo.com/
-- [ ] LangChain docs — https://python.langchain.com/
-- [ ] LlamaIndex docs — https://docs.llamaindex.ai/
+- [x] LangChain **Tools** — https://docs.langchain.com/oss/python/langchain/tools
+- [x] LangChain **Agents** (`create_agent`) — https://docs.langchain.com/oss/python/langchain/agents
+- [x] LangChain **Tool calling** — https://docs.langchain.com/oss/python/langchain/tool-calling (optional deepen)
+- [x] LlamaIndex **Introduction to RAG** — https://docs.llamaindex.ai/en/stable/understanding/rag/
+- [ ] LlamaIndex chat engines / vector stores — explore from Understanding hub
 - [ ] Your notes / blog / loom links: _add here_
 
 ---
@@ -245,9 +390,18 @@ Max 5 rounds (`MAX_CHAT_TOOL_ROUNDS`) to prevent infinite tool loops.
 | 2026-07-15 | Removed Sources panel from Docs UI | Simpler UX; dropped per-query source-hiding logic in `/rag` |
 | 2026-07-15 | Fixed SSE space stripping in BFF | `parseSseDataLine` — preserve leading spaces in streamed tokens |
 | 2026-07-15 | Comment pass on `backend/main.py` | Documented tool loop, streaming delay, history sync |
+| 2026-07-16 | Split chat tool paths: `/chat` = `create_agent`, `/chat/stream` = manual loop | Same `get_weather` tool; compare via Swagger vs UI; `invoke_chat_with_tools` kept for tests |
+| 2026-07-16 | Concepts deep-dive: prompt template vs system prompt, tokens/context, chunking | Mapped each concept to `main.py` — system prompt, `RAG_CONTEXT_PROMPT`, `remember()` trim, default LlamaIndex splitter |
 
 ---
 
 ## Current focus
 
-> Project B done (`get_weather` on Chat). Optional next: Phase 6 logging/timeouts, RAG SSE streaming, tool-status UI (“Checking weather…”), or a second tool.
+> **Done:** Concepts checklist complete. `/chat` = `create_agent`; `/chat/stream` = manual loop.
+
+**Next options**
+
+1. **Hybrid RAG (Phase 4)** — LlamaIndex retrieve → LangChain/Groq answer in one flow
+2. **Optional UI toggle** — call `POST /chat` from the browser to try `create_agent` without Swagger
+3. **Chunking experiment** — explicit `SentenceSplitter` + compare RAG quality on your `data/` files
+4. **Phase 6** — logging, rate limits, LLM timeouts (when you want production polish)

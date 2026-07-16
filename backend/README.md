@@ -1,6 +1,26 @@
 # Learning backend (FastAPI + LangChain + LlamaIndex)
 
-## Setup (same as Phase 0)
+Python API for the FastAPI learning stack. Serves **chat** (LangChain + Groq) and **Ask My Docs** (LlamaIndex RAG + Supabase pgvector). The Next.js UI in [`../web/`](../web/) proxies to this server on port **8000**.
+
+Stack: **FastAPI** · **Uvicorn** · **LangChain** · **LlamaIndex** · **Groq** · **Hugging Face Inference API** · **Supabase (pgvector)**
+
+## Prerequisites
+
+| Tool | Version |
+| --- | --- |
+| Python | 3.10+ |
+
+API keys:
+
+| Key | Required for |
+| --- | --- |
+| `GROQ_API_KEY` | Chat + RAG answers |
+| `HUGGINGFACE_API_KEY` | Ask My Docs embeddings |
+| `SUPABASE_DB_URL` | Ask My Docs vector storage |
+
+Chat works with only Groq. Ask My Docs needs all three.
+
+## Setup
 
 ```bash
 cd backend
@@ -8,13 +28,30 @@ python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-cp .env.example .env               # then put your real GROQ_API_KEY in .env
+cp .env.example .env
 ```
+
+Edit `.env` and set at least `GROQ_API_KEY`. For Ask My Docs, also set `HUGGINGFACE_API_KEY` and `SUPABASE_DB_URL`.
+
+## Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GROQ_API_KEY` | — | Groq LLM for chat and RAG |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Chat / RAG model name |
+| `HUGGINGFACE_API_KEY` | — | Cloud embeddings (no local torch) |
+| `HF_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model |
+| `HF_EMBED_DIM` | `384` | Must match Supabase collection dim |
+| `SUPABASE_DB_URL` | — | Postgres URI (`postgresql://…`) |
+| `SUPABASE_COLLECTION` | `ai_chat_docs` | Vector collection name |
+| `RAG_MAX_UPLOAD_BYTES` | `2097152` (2 MB) | Upload size limit |
+| `RAG_SOURCE_SCORE_GAP` | `0.08` | Filter weak RAG source chunks |
+
+Never commit `.env`.
 
 ## Run
 
-Always activate the venv first (or call `.venv/bin/uvicorn` directly).
-If you run system `uvicorn` outside the venv, imports like `langchain_groq` will fail.
+Always use the venv (or call `.venv/bin/uvicorn` directly). System `uvicorn` outside the venv will miss packages like `langchain_groq`.
 
 ```bash
 source .venv/bin/activate
@@ -22,31 +59,53 @@ which uvicorn   # should be .../backend/.venv/bin/uvicorn
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- API: http://127.0.0.1:8000  
-- Docs: http://127.0.0.1:8000/docs  
-- Health: http://127.0.0.1:8000/health  
+| URL | What |
+| --- | --- |
+| http://127.0.0.1:8000 | Root |
+| http://127.0.0.1:8000/docs | Swagger UI |
+| http://127.0.0.1:8000/health | Key / config check |
 
-## RAG embeddings
+## API endpoints
 
-Uses **Hugging Face Inference API** (`HUGGINGFACE_API_KEY`) — cloud embeddings, no local torch needed for RAG.
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/` | Hello |
+| `GET` | `/health` | Config flags (no secrets) |
+| `POST` | `/chat` | Full JSON chat reply |
+| `POST` | `/chat/stream` | SSE token stream (used by the web UI) |
+| `DELETE` | `/chat/session/{id}` | Clear in-memory chat history |
+| `POST` | `/rag` | Document Q&A |
+| `POST` | `/rag/upload` | Upload `.md` / `.txt` (incremental insert) |
+| `POST` | `/rag/rebuild` | Re-embed everything in `data/` |
+| `DELETE` | `/rag/session/{id}` | Clear RAG conversation (keeps vectors) |
+
+### Chat notes
+
+- `/chat` uses LangChain **`create_agent`** (automatic tool loop). `/chat/stream` uses the **manual** `bind_tools` loop (what the web UI calls). Same `get_weather` tool on both. Try: *"What's the weather in London?"*
+- Requests may include `history` so context survives reload.
+- `/chat/stream` skips `remember()` if the client disconnects (Stop button).
+
+### RAG notes
+
+- Vectors live in **Supabase Postgres (pgvector)**, not only in memory.
+- Source files live in `backend/data/`. After editing them, call `POST /rag/rebuild`.
+- Upload accepts `.md` / `.txt` only; duplicate filenames return `409`.
 
 ## Vector store: Supabase + pgvector
 
-Vectors are stored in **Supabase Postgres** (pgvector), not only in memory.
-
 1. Create a free project at https://supabase.com
-2. In the project: open SQL Editor and run:
+2. SQL Editor — run:
 
 ```sql
 create extension if not exists vector;
 ```
 
-3. Dashboard → **Connect** → copy the **URI** connection string  
-   - Prefer **Session pooler** (`*.pooler.supabase.com`) if direct DB host fails  
-   - Change `postgres://` → `postgresql://` if needed  
-   - Replace `[YOUR-PASSWORD]` with your database password  
-   - If the password has `@ # % *` etc., leave it as-is in `.env` — the backend URL-encodes it automatically  
-4. Put it in `backend/.env` as `SUPABASE_DB_URL=...`
+3. Dashboard → **Connect** → copy the **URI**
+   - Prefer **Session pooler** (`*.pooler.supabase.com`) if direct DB host fails
+   - Use `postgresql://` (not `postgres://`)
+   - Replace `[YOUR-PASSWORD]` with your DB password
+   - Special characters in the password are URL-encoded by the backend
+4. Set `SUPABASE_DB_URL=...` in `backend/.env`
 5. Restart uvicorn, then:
 
 ```bash
@@ -57,25 +116,31 @@ curl -s -X POST http://127.0.0.1:8000/rag \
   -d '{"question":"What is the fridge password?"}'
 ```
 
-After editing files in `data/`, call `POST /rag/rebuild` again.
+## Next.js integration (`web/`)
 
-## Next.js integration (Phase 5)
+The learning UI is in **`fastapi-stack/web/`** (port **3001**). See [../web/README.md](../web/README.md).
 
-The learning UI lives in **`fastapi-stack/web/`** (port 3001), not in the parent AI-Chat app.
-
-| UI mode | Next route (`web/`) | FastAPI |
+| UI mode | Next.js | FastAPI |
 | --- | --- | --- |
-| Chat | `POST /api/chat` | `POST /chat/stream` (+ optional `history`) |
+| Chat | `POST /api/chat` | `POST /chat/stream` |
 | Ask My Docs | `POST /api/rag` | `POST /rag` |
-| Upload doc | `POST /api/rag/upload` | `POST /rag/upload` (.md / .txt, incremental insert) |
+| Upload doc | `POST /api/rag/upload` | `POST /rag/upload` |
 | Clear chat | `DELETE /api/chat/session` | `DELETE /chat/session/{id}` |
 | Clear docs | `DELETE /api/rag?session_id=` | `DELETE /rag/session/{id}` |
 
-Chat requests may include `history` (prior turns) so Groq stays in sync when users switch from Gemini/HF.
+Browser → Next.js BFF → this FastAPI app. API keys stay in `backend/.env` only.
 
-`/chat` and `/chat/stream` use LangChain **tool calling** with a `get_weather` tool (Open-Meteo, no extra API key). Try in Chat mode: *"What's the weather in London?"*
+## Project layout
 
-`/chat/stream` skips `remember()` if the client disconnects (Stop button).
+```text
+backend/
+  main.py           # App, chat, RAG, tools
+  requirements.txt
+  .env.example
+  data/             # RAG source docs (.md / .txt)
+  tests/
+    test_main.py
+```
 
 ## Tests
 
@@ -83,3 +148,13 @@ Chat requests may include `history` (prior turns) so Groq stays in sync when use
 .venv/bin/python -m unittest tests.test_main -v
 ```
 
+## Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| `No module named 'langchain_groq'` | Activate venv or run `.venv/bin/uvicorn ...` |
+| `bash: .venv/bin/activate: No such file` | Run `python3 -m venv .venv` inside `backend/` |
+| Ask My Docs errors | Set `HUGGINGFACE_API_KEY` + `SUPABASE_DB_URL`, then `POST /rag/rebuild` |
+| Empty / weak RAG answers | Rebuild index; check `data/` files and Supabase table `vecs.ai_chat_docs` |
+
+Full stack (both terminals): [../README.md](../README.md). Learning checklist: [../LEARNING_LANGCHAIN_LLAMAINDEX_FASTAPI.md](../LEARNING_LANGCHAIN_LLAMAINDEX_FASTAPI.md).

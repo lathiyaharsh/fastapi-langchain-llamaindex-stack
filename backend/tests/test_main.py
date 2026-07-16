@@ -68,6 +68,40 @@ class MainHelpersTest(unittest.TestCase):
             result = main.get_weather.invoke({"location": "Mumbai"})
         self.assertEqual(result, "Mumbai: Clear sky.")
 
+    def test_invoke_chat_with_agent(self) -> None:
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        seen: list[list[object]] = []
+
+        class FakeAgent:
+            def invoke(self, payload: dict[str, object]) -> dict[str, object]:
+                messages = list(payload["messages"])  # type: ignore[arg-type]
+                seen.append(messages)
+                return {
+                    "messages": [
+                        messages[0],
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "name": "get_weather",
+                                    "args": {"location": "London"},
+                                    "id": "call_1",
+                                }
+                            ],
+                        ),
+                        ToolMessage(content="London: Clear.", tool_call_id="call_1"),
+                        AIMessage(content="Clear skies in London."),
+                    ]
+                }
+
+        with patch.object(main, "get_chat_agent", return_value=FakeAgent()):
+            reply = main.invoke_chat_with_agent("s-agent", "Weather in London?", "concise")
+        self.assertEqual(reply, "Clear skies in London.")
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(len(seen[0]), 1)
+        self.assertIsInstance(seen[0][0], HumanMessage)
+
     def test_invoke_chat_with_tools(self) -> None:
         from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -196,6 +230,8 @@ class MainRoutesTest(unittest.TestCase):
         self.assertIn("groq_key_configured", data)
         self.assertIn("chat_tools", data)
         self.assertEqual(data["chat_tools"], ["get_weather"])
+        self.assertEqual(data["chat_nonstream"], "create_agent")
+        self.assertEqual(data["chat_stream"], "manual_bind_tools_loop")
 
     def test_clear_chat_session(self) -> None:
         main.chat_sessions["abc"] = []
