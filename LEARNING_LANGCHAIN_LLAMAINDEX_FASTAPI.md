@@ -378,6 +378,7 @@ Flow in this project: `SimpleDirectoryReader` → `VectorStoreIndex.from_documen
 - [x] LlamaIndex **Introduction to RAG** — https://docs.llamaindex.ai/en/stable/understanding/rag/
 - [ ] LlamaIndex chat engines / vector stores — explore from Understanding hub
 - [x] Neural Networks beginner guide — https://www.geeksforgeeks.org/deep-learning/neural-networks-a-beginners-guide/
+- [x] Google **Introduction to Machine Learning** — https://developers.google.com/machine-learning/intro-to-ml/
 - [ ] Your notes / blog / loom links: _add here_
 
 ---
@@ -417,6 +418,29 @@ Flow in this project: `SimpleDirectoryReader` → `VectorStoreIndex.from_documen
 | Supervised learning idea | Embeddings + RAG use pretrained models; you don't train from scratch here |
 
 You are **using** neural nets (LLM + embeddings), not training them in this repo — still useful to know what sits under Groq / HF.
+
+### Explored further (Google Intro to ML + NLP stack basics)
+
+Sources:
+- [Google Introduction to Machine Learning](https://developers.google.com/machine-learning/intro-to-ml/)
+- [GFG Neural Networks beginner guide](https://www.geeksforgeeks.org/deep-learning/neural-networks-a-beginners-guide/)
+- Plus topic exploration: **Dataset preparation & tokenization**, **word embeddings**, **Transformer architecture**
+
+| Topic | What it means | In your FastAPI stack |
+| --- | --- | --- |
+| **Dataset prep** | Clean/split/label data before training | You skip training; prep = `backend/data/*.md`, upload, `/rag/rebuild` |
+| **Tokenization** | Split text into model tokens (subwords) | Groq counts/bills tokens; context window = token budget; SSE streams tokens |
+| **Word embeddings** | Tokens/words → dense vectors | RAG: HF `bge-small` → 384-d vectors in Supabase; LLM: internal token embeddings |
+| **Transformer architecture** | Attention + FFN blocks (modern NLP) | Groq Llama / embed models — see RAG Parts 2–3 in this file |
+| **Google Intro to ML** | Features, labels, train vs predict, overfitting basics | Mental model for “pretrained model + your prompt/data” vs training from scratch |
+
+**Checklist**
+
+- [x] Dataset preparation & tokenization (explored)
+- [x] Word embeddings (explored + mapped to RAG vectors)
+- [x] Transformer architecture (explored + Parts 2–3 notes)
+- [x] Google Intro to ML path
+- [x] GFG neural networks beginner guide
 
 ---
 
@@ -796,16 +820,17 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 | 2026-07-17 | Transformer Part 2: position, attention, multi-head, FFN | Q/K/V + heads + FFN; contrasted RAG embeddings vs LLM token embeddings; full `/rag` mental model |
 | 2026-07-17 | Part 3: next-token, temperature, context as working memory | Mapped to `temperature=0.7`, SSE stream, `remember()[-20]`, `top_k=3`, tool delay |
 | 2026-07-17 | Part 4: chunking for RAG | Default LlamaIndex splitter; size/overlap/top_k; rebuild after doc/splitter changes; symptoms→fixes |
+| 2026-07-17 | Explored Google Intro to ML + tokenization, word embeddings, Transformers | Mapped to data prep / tokens / bge-small / Groq; GFG NN guide already logged |
 
 ---
 
 ## Current focus
 
-> **Done:** RAG internals Parts 1–4 (embeddings → Transformer → next-token/context → chunking). Theory track for this deep-dive is complete.
+> **Done:** Embeddings & vector search for RAG internals; also explored Google Intro to ML, tokenization, word embeddings, Transformer architecture (with GFG NN basics).
 
 **Next options**
 
 1. **Apply it** — same question on `/rag` vs `/rag-hybrid`; narrate with Parts 1–4 vocabulary
-2. **Code experiment** — add explicit `SentenceSplitter(chunk_size=512, chunk_overlap=64)` + `/rag/rebuild`
+2. **Code experiment** — `SentenceSplitter(chunk_size=512, chunk_overlap=64)` + `/rag/rebuild`
 3. **Try temperature** — change `get_model()` temp and compare factual vs creative replies
 4. **Phase 6** — logging, rate limits, LLM timeouts (production polish)
