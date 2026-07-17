@@ -420,6 +420,175 @@ You are **using** neural nets (LLM + embeddings), not training them in this repo
 
 ---
 
+## RAG internals deep-dive (embeddings → Transformer pieces)
+
+### Part 1 — Embeddings & vector search (what `/rag` actually does)
+
+**Embedding** = turn text into a fixed-length list of numbers (a **vector**) so similar meaning → nearby vectors.
+
+| In this project | Value |
+| --- | --- |
+| Model | `BAAI/bge-small-en-v1.5` via HF Inference API |
+| Dimension | **384** (`HF_EMBED_DIM`) — must match Supabase collection |
+| Store | Supabase **pgvector** (`vecs.ai_chat_docs`) |
+| Retrieve | `similarity_top_k=3` |
+
+**Ingest (once / on rebuild / upload)**
+
+```text
+.md file → chunk → embed each chunk → store [vector + text] in Supabase
+```
+
+**Query (every `/rag` or `/rag-hybrid` ask)**
+
+```text
+question → embed question → find nearest chunk vectors → return text → LLM answers
+```
+
+**Why vectors?** Keyword search misses “fridge code” vs “fridge password”. Embedding search matches **meaning**.
+
+**Similarity (intuition)**
+
+- Cosine similarity / distance: how “aligned” two vectors are
+- Your Supabase store reports scores as `~1 - exp(-distance)` → **lower = better**
+- That’s why `SimilarityPostprocessor(min_similarity=0.5)` broke RAG earlier
+
+**Checklist for Part 1**
+
+- [x] Embedding = meaning as numbers
+- [x] Dim must match store (384)
+- [x] Ingest embeds docs; query embeds question; nearest neighbors = retrieval
+- [x] `top_k` = how many chunks enter the LLM prompt
+
+### Part 2 — Transformer building blocks (what Groq’s LLM uses)
+
+Modern LLMs (and many embedders) are **Transformers**. Four ideas:
+
+| Block | Job in one line |
+| --- | --- |
+| **Token embeddings** | Words/subwords → vectors (like RAG embeddings, but inside the LLM) |
+| **Positional encoding** | Inject *order* (“who” before “set”) — without this, bag-of-words |
+| **Multi-head attention** | Each token looks at other tokens; many “heads” = many viewpoints |
+| **Feed-forward network (FFN)** | Per-token MLP that mixes features after attention |
+
+**Stack of one Transformer block (simplified)**
+
+```text
+tokens
+  → embed + position
+  → Multi-Head Attention  (who relates to whom?)
+  → Feed-Forward          (process each token’s features)
+  → … repeat many layers …
+  → predict next token
+```
+
+#### 2a. Positional encoding — why order matters
+
+Attention alone is **permutation-invariant**: without position info,  
+`"dog bites man"` and `"man bites dog"` look the same as bags of tokens.
+
+**Positional encoding** adds a position signal to each token embedding:
+
+```text
+token_vector + position_vector  →  model knows "who" is at index 0, "set" at index 1, …
+```
+
+Classic paper used sine/cosine patterns; modern LLMs often use **RoPE** (rotary) or learned positions — same goal: encode *where* in the sequence.
+
+**In your app:** chat history order, system prompt before user message, and retrieved chunks in `RAG_CONTEXT_PROMPT` all rely on position so Groq can tell “User said X, then Assistant said Y.”
+
+#### 2b. Attention — Query / Key / Value
+
+For each token, the model builds three vectors from its embedding:
+
+| Name | Intuition | Analogy |
+| --- | --- | --- |
+| **Query (Q)** | “What am I looking for?” | Search query |
+| **Key (K)** | “What do I contain / advertise?” | Document title / index |
+| **Value (V)** | “What content do I give if selected?” | Document body |
+
+**Scaled dot-product attention (one head):**
+
+```text
+scores = Q · Kᵀ          # how much each token matches each other token
+weights = softmax(scores) # turn into probabilities that sum to 1
+output  = weights · V     # blend the Values using those weights
+```
+
+Example: when generating an answer about the fridge password, tokens in the *question* get high attention weights on tokens in the *retrieved chunk* that contain `BANANA-42`.
+
+#### 2c. Multi-head attention — why more than one head
+
+One head = one way of relating tokens. **Multi-head** runs several attentions in parallel, then concatenates:
+
+| Head might specialize in… | Example |
+| --- | --- |
+| Syntax | subject ↔ verb |
+| Coreference | “it” ↔ “fridge password” |
+| Copying facts | question ↔ retrieved chunk numbers/codes |
+
+```text
+Head1(Q,K,V) ‖ Head2(Q,K,V) ‖ … ‖ HeadH(Q,K,V)  →  linear mix → output
+```
+
+More heads ≈ more viewpoints in one layer. Big models (70B) have many heads × many layers.
+
+#### 2d. Feed-forward network (FFN)
+
+After attention mixes information *across* tokens, an **FFN** processes *each token alone*:
+
+```text
+for each token independently:
+  x → Linear → activation (e.g. GELU/ReLU) → Linear → x'
+```
+
+Think: attention = “who should I listen to?”; FFN = “given what I heard, update my features.”  
+Often the FFN is where a lot of “factual / lexical” capacity lives (huge middle dimension).
+
+#### 2e. RAG embeddings vs LLM token embeddings
+
+| | RAG embedding (`bge-small`) | LLM token embedding (Groq) |
+| --- | --- | --- |
+| Input | Whole chunk or question | Each subword/token |
+| Output | One 384-d vector | Sequence of vectors |
+| Job | Find similar docs in pgvector | Start of generating / understanding the prompt |
+| Stored? | Yes — Supabase | No — computed per request inside the model |
+
+Same family of idea (text → vectors); different place in the pipeline.
+
+**How this connects to RAG**
+
+| Piece | Your stack |
+| --- | --- |
+| Embedding model | Separate small Transformer → vectors for pgvector |
+| Groq LLM | Large Transformer → reads prompt (system + history + retrieved chunks) → generates answer tokens |
+| Attention (intuition) | Model “pays attention” to fridge password chunk when answering “what’s the code?” |
+| Position | History + chunk order in the prompt stay meaningful |
+| FFN | Refines each token’s representation before next layer / next-token prediction |
+
+**Full mental model (your `/rag` request)**
+
+```text
+1. Embed question          ← small embedding model (Part 1)
+2. Vector search top-k     ← pgvector
+3. Build prompt            ← system + chunks + history + question
+4. Groq Transformer:       ← Part 2
+     embed tokens + positions
+     → [attention + FFN] × many layers
+     → next-token probabilities
+5. Stream / return answer
+```
+
+**Checklist for Part 2**
+
+- [x] Positional encoding: why order matters
+- [x] Attention: Query / Key / Value intuition
+- [x] Multi-head: why more than one head
+- [x] FFN: what happens after attention
+- [x] Embeddings (RAG) vs token embeddings (LLM): related but different jobs
+
+---
+
 ## Progress log
 
 | Date | What I finished | Blockers / learnings |
@@ -443,17 +612,18 @@ You are **using** neural nets (LLM + embeddings), not training them in this repo
 | 2026-07-16 | Built `/rag-hybrid` in new `backend/rag_hybrid.py` module | LlamaIndex retrieves chunks; LangChain/Groq answers; includes `retrieval_query` for debugging |
 | 2026-07-16 | Commented `backend/rag_hybrid.py` | Top-to-bottom notes: memory → condense → retrieve → answer |
 | 2026-07-16 | Neural networks beginner guide (GFG) | Neurons, layers, forward/backprop, activations; mapped to Groq LLM + HF embeddings in this stack |
+| 2026-07-17 | Started RAG internals: embeddings + vector search | Mapped to `bge-small` / 384-dim / Supabase pgvector / `top_k=3`; sketched Transformer blocks for next |
+| 2026-07-17 | Transformer Part 2: position, attention, multi-head, FFN | Q/K/V + heads + FFN; contrasted RAG embeddings vs LLM token embeddings; full `/rag` mental model |
 
 ---
 
 ## Current focus
 
-> **Done:** Concepts checklist + hybrid RAG + NN beginner basics. `/chat` = `create_agent`; `/chat/stream` = manual loop; `/rag` vs `/rag-hybrid` for RAG styles.
+> **Done:** Part 1 (embeddings/vector search) + Part 2 (positional encoding, multi-head attention, FFN).
 
 **Next options**
 
-1. **Test and compare RAG styles** — same question to `/rag` and `/rag-hybrid`, inspect `sources` and `retrieval_query`
-2. **Deepen ML fundamentals** — embeddings / transformers / tokens (how LLMs generate text)
-3. **Optional UI toggle** — call `POST /chat` or `/rag-hybrid` from the browser without Swagger
-4. **Chunking experiment** — explicit `SentenceSplitter` + compare RAG quality on your `data/` files
-5. **Phase 6** — logging, rate limits, LLM timeouts (when you want production polish)
+1. **Apply it** — same question to `/rag` and `/rag-hybrid`; explain retrieval vs generation using today’s vocabulary
+2. **Part 3 (optional)** — next-token prediction, temperature, context window as “working memory”
+3. **Chunking experiment** — `SentenceSplitter` and how chunk boundaries affect retrieval quality
+4. **Phase 6** — logging, rate limits, LLM timeouts (production polish)
