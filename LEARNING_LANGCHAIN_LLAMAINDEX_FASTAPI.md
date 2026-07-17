@@ -682,6 +682,91 @@ Tool delay ~1–2s: model may emit `tool_calls` first (not user text), then weat
 - [x] Streaming = same loop, tokens exposed early
 - [x] RAG puts facts into working memory so attention can use them
 
+### Part 4 — Chunking (what you embed and retrieve)
+
+**Chunking** = split each document into smaller pieces **before** embedding.  
+Each chunk becomes **one vector** in Supabase. Retrieval returns chunks, not whole files.
+
+```text
+lab-secret.md
+  → [chunk A] [chunk B] [chunk C]
+  → embed A, B, C  →  3 rows in pgvector
+  → query finds nearest chunks  →  those texts go into the LLM prompt
+```
+
+#### 4a. Why not embed the whole file?
+
+| Whole-file embedding | Chunked embedding |
+| --- | --- |
+| One vector averages the whole doc | Each vector focuses on a local passage |
+| Query must match “overall” meaning | Query can hit a specific fact |
+| Hard to fit long docs in prompt | Send only top-k small pieces |
+
+Your `data/` files are short, so defaults work well — chunking still matters as docs grow (uploads, manuals).
+
+#### 4b. What your project does today
+
+```text
+SimpleDirectoryReader → VectorStoreIndex.from_documents(docs)
+```
+
+No explicit `SentenceSplitter` yet → LlamaIndex **default** node parser (roughly ~1024-token chunks, small overlap — library default).  
+After change: call `POST /rag/rebuild` or vectors stay stale.
+
+#### 4c. Knobs that matter
+
+| Knob | Meaning | Trade-off |
+| --- | --- | --- |
+| **chunk_size** | Max size of one piece | Too small → fact split across chunks; too big → diluted / noisy retrieval |
+| **chunk_overlap** | Shared text between neighbors | Helps if a sentence straddles a boundary; costs more storage |
+| **similarity_top_k** | How many chunks enter the prompt | Higher = more context + more tokens/noise |
+| **score gap** (`RAG_SOURCE_SCORE_GAP`) | Drop weak source previews | Cleanup for API `sources`, not the LLM path itself |
+
+#### 4d. Overlap intuition
+
+```text
+… the fridge password is BANANA-42 and was set by …
+          ^-- if the cut falls here, one chunk may miss the code
+With overlap, both neighbors may still contain "BANANA-42"
+```
+
+#### 4e. Symptoms → fix (use Parts 1–3 vocabulary)
+
+| Symptom | Likely cause | Try |
+| --- | --- | --- |
+| “I don’t know” but fact is in the file | Fact split / wrong chunk retrieved | Smaller chunks + overlap; check `retrieval_query` on `/rag-hybrid` |
+| Answer mixes irrelevant notes | Chunk too large or `top_k` too high | Smaller chunks; lower `top_k` |
+| Good answer, weird `sources` | Weak neighbors near best hit | Tighten `RAG_SOURCE_SCORE_GAP` |
+| After editing `.md`, old answers | Vectors not rebuilt | `POST /rag/rebuild` |
+
+#### 4f. Optional experiment (when you want to code)
+
+```python
+from llama_index.core.node_parser import SentenceSplitter
+
+splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
+# pass via transformations=... into from_documents, then /rag/rebuild
+```
+
+Compare the same question before/after; inspect `/rag-hybrid` `retrieval_query` + `sources`.
+
+#### 4g. How Parts 1–4 fit together
+
+```text
+Chunking (Part 4)  →  what text becomes a vector
+Embeddings (Part 1) →  how that text becomes numbers + nearest-neighbor search
+Transformer (Part 2) →  how Groq attends over retrieved chunk text in the prompt
+Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
+```
+
+**Checklist for Part 4**
+
+- [x] Chunk = unit of embedding + retrieval
+- [x] size / overlap / top_k trade-offs
+- [x] Project uses LlamaIndex default splitter until you set one
+- [x] Rebuild required after changing docs or splitter
+- [x] Bad RAG often starts at chunk boundaries, not “the LLM is dumb”
+
 ---
 
 ## Progress log
@@ -710,16 +795,17 @@ Tool delay ~1–2s: model may emit `tool_calls` first (not user text), then weat
 | 2026-07-17 | Started RAG internals: embeddings + vector search | Mapped to `bge-small` / 384-dim / Supabase pgvector / `top_k=3`; sketched Transformer blocks for next |
 | 2026-07-17 | Transformer Part 2: position, attention, multi-head, FFN | Q/K/V + heads + FFN; contrasted RAG embeddings vs LLM token embeddings; full `/rag` mental model |
 | 2026-07-17 | Part 3: next-token, temperature, context as working memory | Mapped to `temperature=0.7`, SSE stream, `remember()[-20]`, `top_k=3`, tool delay |
+| 2026-07-17 | Part 4: chunking for RAG | Default LlamaIndex splitter; size/overlap/top_k; rebuild after doc/splitter changes; symptoms→fixes |
 
 ---
 
 ## Current focus
 
-> **Done:** RAG internals Parts 1–3 (embeddings → Transformer blocks → next-token / temperature / context window).
+> **Done:** RAG internals Parts 1–4 (embeddings → Transformer → next-token/context → chunking). Theory track for this deep-dive is complete.
 
 **Next options**
 
-1. **Apply it** — same question on `/rag` vs `/rag-hybrid`; narrate retrieval vs generation with Part 1–3 vocabulary
-2. **Chunking experiment** — `SentenceSplitter` and how boundaries affect retrieval
+1. **Apply it** — same question on `/rag` vs `/rag-hybrid`; narrate with Parts 1–4 vocabulary
+2. **Code experiment** — add explicit `SentenceSplitter(chunk_size=512, chunk_overlap=64)` + `/rag/rebuild`
 3. **Try temperature** — change `get_model()` temp and compare factual vs creative replies
 4. **Phase 6** — logging, rate limits, LLM timeouts (production polish)
