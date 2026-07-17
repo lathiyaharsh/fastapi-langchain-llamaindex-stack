@@ -587,6 +587,101 @@ Same family of idea (text → vectors); different place in the pipeline.
 - [x] FFN: what happens after attention
 - [x] Embeddings (RAG) vs token embeddings (LLM): related but different jobs
 
+### Part 3 — Next-token prediction, temperature, context as working memory
+
+#### 3a. Next-token prediction (what “generation” really is)
+
+An LLM does **not** invent a full paragraph in one shot. It repeatedly:
+
+```text
+prompt tokens  →  Transformer  →  probability for every token in vocabulary
+               →  pick one token
+               →  append it to the prompt
+               →  repeat until stop / max length
+```
+
+Example (simplified):
+
+```text
+"The fridge password is"
+  → model: P("BANANA") high, P("apple") low, …
+  → pick "BANANA"
+"The fridge password is BANANA"
+  → pick "-42"
+→ …
+```
+
+Your `/chat/stream` SSE is exactly this loop made visible: **one (or a few) tokens at a time**.
+
+Training (Karpathy talk): predict the next token on huge text → weights learn language patterns.  
+Inference (your API): freeze weights; only run the forward pass + sampling.
+
+#### 3b. Temperature — how “random” the pick is
+
+After the Transformer outputs logits (raw scores), they become probabilities. **Temperature** scales those scores before softmax:
+
+| Temperature | Behavior | When |
+| --- | --- | --- |
+| **Low** (≈0–0.3) | Peakier probs → more deterministic / focused | Facts, codes, tool JSON |
+| **Medium** (≈0.7) | Balanced | Your chat default (`temperature=0.7` in `get_model()`) |
+| **High** (≈1.0+) | Flatter probs → more creative / varied / riskier | Brainstorming |
+
+```text
+probs = softmax(logits / temperature)
+```
+
+Temperature does **not** change what the model “knows” — only how boldly it samples. RAG still matters for facts; low temp alone won’t invent a doc that wasn’t retrieved.
+
+Related knobs (you may see later): `top_p` / `top_k` sampling — limit the candidate set before picking.
+
+#### 3c. Context window = working memory (not long-term memory)
+
+The **context window** is everything in *this* API call the model can attend over:
+
+```text
+system + tools schema + history + retrieved chunks + user message + tokens generated so far
+```
+
+Karpathy analogy: LLM weights ≈ long-term knowledge (lossy, trained once);  
+**context window ≈ RAM / working memory** for this conversation turn.
+
+| Your control | Effect on working memory |
+| --- | --- |
+| `remember()` keeps last **20** messages | Caps chat history tokens |
+| `similarity_top_k=3` | Caps RAG chunk tokens |
+| `reply_mode` concise vs detailed | Nudges shorter/longer *output* |
+| Pydantic `max_length=8000` | Caps single user message chars |
+| Tool round-trips | Extra hidden messages (tool_calls + ToolMessage) before final text |
+
+**Why RAG helps:** weights may not “remember” your fridge password; putting the chunk in context puts it in **working memory** so attention can copy it into the answer.
+
+**Why history sync from Next.js matters:** server RAM clears on uvicorn reload; client `history` reloads working memory for the next call.
+
+#### 3d. Streaming vs one-shot (same math)
+
+| Endpoint | UX | Internals |
+| --- | --- | --- |
+| `/chat` (`create_agent`) | Wait → full JSON | Still next-token under the hood; you only see the end |
+| `/chat/stream` | Tokens arrive live | Same loop; each token yielded as SSE |
+
+Tool delay ~1–2s: model may emit `tool_calls` first (not user text), then weather HTTP, then final answer tokens stream.
+
+#### 3e. Hallucination vs grounded answers (Part 1–3 together)
+
+| Failure | Cause | Mitigation you already use / can use |
+| --- | --- | --- |
+| Wrong doc fact | Bad retrieval / weak chunks | Better chunking, `top_k`, score filtering |
+| Confident wrong answer | Model sampling from weights, not context | RAG + prompt “say you don’t know”; lower temperature for facts |
+| Forgot earlier turn | Dropped from context | `history` sync + `remember()` trim awareness |
+
+**Checklist for Part 3**
+
+- [x] Generation = repeated next-token prediction
+- [x] Temperature scales randomness of sampling
+- [x] Context window = working memory for one call
+- [x] Streaming = same loop, tokens exposed early
+- [x] RAG puts facts into working memory so attention can use them
+
 ---
 
 ## Progress log
@@ -614,16 +709,17 @@ Same family of idea (text → vectors); different place in the pipeline.
 | 2026-07-16 | Neural networks beginner guide (GFG) | Neurons, layers, forward/backprop, activations; mapped to Groq LLM + HF embeddings in this stack |
 | 2026-07-17 | Started RAG internals: embeddings + vector search | Mapped to `bge-small` / 384-dim / Supabase pgvector / `top_k=3`; sketched Transformer blocks for next |
 | 2026-07-17 | Transformer Part 2: position, attention, multi-head, FFN | Q/K/V + heads + FFN; contrasted RAG embeddings vs LLM token embeddings; full `/rag` mental model |
+| 2026-07-17 | Part 3: next-token, temperature, context as working memory | Mapped to `temperature=0.7`, SSE stream, `remember()[-20]`, `top_k=3`, tool delay |
 
 ---
 
 ## Current focus
 
-> **Done:** Part 1 (embeddings/vector search) + Part 2 (positional encoding, multi-head attention, FFN).
+> **Done:** RAG internals Parts 1–3 (embeddings → Transformer blocks → next-token / temperature / context window).
 
 **Next options**
 
-1. **Apply it** — same question to `/rag` and `/rag-hybrid`; explain retrieval vs generation using today’s vocabulary
-2. **Part 3 (optional)** — next-token prediction, temperature, context window as “working memory”
-3. **Chunking experiment** — `SentenceSplitter` and how chunk boundaries affect retrieval quality
+1. **Apply it** — same question on `/rag` vs `/rag-hybrid`; narrate retrieval vs generation with Part 1–3 vocabulary
+2. **Chunking experiment** — `SentenceSplitter` and how boundaries affect retrieval
+3. **Try temperature** — change `get_model()` temp and compare factual vs creative replies
 4. **Phase 6** — logging, rate limits, LLM timeouts (production polish)
