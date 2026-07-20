@@ -31,6 +31,7 @@ Run (from backend/, with venv active):
 import os
 import re
 import time
+import warnings
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Sequence, cast
@@ -339,16 +340,44 @@ def _collection_is_empty(vector_store: SupabaseVectorStore) -> bool:
         collection = vector_store._collection
         if collection is None:
             return True  # no collection yet → treat as empty, will ingest
-        # Dummy vector search: if zero rows, Supabase has no embeddings yet
-        rows = collection.query(
-            data=[0.0] * HF_EMBED_DIM,
-            limit=1,
-            include_value=False,
-            include_metadata=False,
-        )
+        # Dummy vector search: if zero rows, Supabase has no embeddings yet.
+        # Querying without an index emits a warning from vecs; suppress here
+        # because this check intentionally runs before index creation on first ingest.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Query does not have a covering index for cosine_distance.*",
+            )
+            rows = collection.query(
+                data=[0.0] * HF_EMBED_DIM,
+                limit=1,
+                include_value=False,
+                include_metadata=False,
+            )
         return len(rows) == 0
     except Exception:
         return True
+
+
+def _ensure_supabase_vector_index(vector_store: SupabaseVectorStore) -> None:
+    """
+    Ensure cosine index exists on vecs collection for faster retrieval.
+
+    Safe to call repeatedly; no-op when already indexed.
+    """
+    try:
+        collection = vector_store._collection
+        if collection is None:
+            return
+        if not collection.is_indexed_for_measure(vecs.IndexMeasure.cosine_distance):
+            collection.create_index(
+                measure=vecs.IndexMeasure.cosine_distance,
+                method=vecs.IndexMethod.auto,
+                replace=False,
+            )
+    except Exception:
+        # Index creation is an optimization, not correctness-critical.
+        pass
 
 
 def _build_rag_index(*, force_rebuild: bool = False) -> VectorStoreIndex:
@@ -370,6 +399,7 @@ def _build_rag_index(*, force_rebuild: bool = False) -> VectorStoreIndex:
 
     needs_ingest = force_rebuild or _collection_is_empty(vector_store)
     if not needs_ingest:
+        _ensure_supabase_vector_index(vector_store)
         # Vectors already in Supabase — just attach the index to them
         return VectorStoreIndex.from_vector_store(vector_store)
 
@@ -380,11 +410,13 @@ def _build_rag_index(*, force_rebuild: bool = False) -> VectorStoreIndex:
     last_error: Exception | None = None
     for attempt in range(1, 4):
         try:
-            return VectorStoreIndex.from_documents(
+            index = VectorStoreIndex.from_documents(
                 docs,
                 storage_context=storage_context,
                 transformations=_rag_transformations(),
             )
+            _ensure_supabase_vector_index(vector_store)
+            return index
         except Exception as exc:
             last_error = exc
             if attempt < 3:

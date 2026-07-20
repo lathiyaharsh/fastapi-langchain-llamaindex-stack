@@ -313,7 +313,7 @@ class MainRoutesTest(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["answer"], "The fridge password is BANANA-42.")
         self.assertEqual(data["retrieval_query"], "What is the fridge password?")
-        self.assertEqual(fake_index.top_k, 3)
+        self.assertEqual(fake_index.top_k, rag_hybrid.RAG_RETRIEVE_TOP_K)
         self.assertEqual(
             fake_index.retriever.query, "What is the fridge password?"
         )
@@ -344,6 +344,29 @@ class MainRoutesTest(unittest.TestCase):
             insert_document.assert_called_once_with(index, uploaded)
         finally:
             uploaded.unlink(missing_ok=True)
+
+    def test_rerank_promotes_keyword_match(self) -> None:
+        from llama_index.core.schema import NodeWithScore, TextNode
+
+        nodes = [
+            NodeWithScore(
+                node=TextNode(text="Our mission is trustworthy artificial intelligence."),
+                score=0.1,
+            ),
+            NodeWithScore(
+                node=TextNode(
+                    text="DataSync supports PostgreSQL, MySQL, Snowflake, and BigQuery."
+                ),
+                score=0.25,
+            ),
+        ]
+        reranked = rag_hybrid.rerank_nodes_by_keywords(
+            "What does DataSync support?",
+            nodes,
+            top_k=1,
+        )
+        self.assertEqual(len(reranked), 1)
+        self.assertIn("DataSync", reranked[0].node.get_content())
 
     def test_health_includes_phase6_flags(self) -> None:
         response = self.client.get("/health")

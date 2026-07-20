@@ -839,15 +839,16 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 | 2026-07-20 | Phase 6: logging + rate limit + LLM timeout | `ops.py`; `GROQ_TIMEOUT_SECONDS`; `RATE_LIMIT_PER_MINUTE`; 429/504 |
 | 2026-07-20 | Chunk tuning: `RAG_CHUNK_SIZE=256`, overlap 64 (experiment) | `/rag` + `/rag-hybrid` still answer DataSync + BANANA-42 correctly; source snippets shifted toward smaller sections |
 | 2026-07-20 | Added `backend/rag_eval.py` for repeatable RAG checks | 3 eval cases × 2 endpoints, latency + pass/fail; `--chunk-size/--chunk-overlap` overrides |
+| 2026-07-20 | Reranking on `/rag-hybrid` | Vector top-6 → keyword overlap rerank → top-3; `rerank_applied` in response |
 
 ---
 
 ## Current focus
 
-> **Done:** Phase 6 core + chunk tuning + repeatable RAG eval runner.
+> **Done:** RAG eval runner + keyword reranking + pgvector index tuning.
 
 **Next options**
 
-1. **Reranking** — improve retrieval ordering after top-k
-2. **Split routers** — `routers/chat.py`, `routers/rag.py`
-3. **Add pgvector index tuning** — reduce retrieval latency/warnings
+1. **Split routers** — `routers/chat.py`, `routers/rag.py`
+2. **Cross-encoder reranker** — upgrade from keyword overlap to model-based rerank
+3. **Latency profiling pass** — compare `/rag` vs `/rag-hybrid` with 10-query batch

@@ -51,6 +51,9 @@ Edit `.env` and set at least `GROQ_API_KEY`. For Ask My Docs, also set `HUGGINGF
 | `RAG_SOURCE_SCORE_GAP` | `0.08` | Filter weak RAG source chunks |
 | `RAG_CHUNK_SIZE` | `512` | SentenceSplitter chunk size (tokens-ish) |
 | `RAG_CHUNK_OVERLAP` | `64` | Overlap between chunks; change + `/rag/rebuild` |
+| `RAG_RERANK_ENABLED` | `true` | Keyword rerank on `/rag-hybrid` after vector search |
+| `RAG_RETRIEVE_TOP_K` | `6` | Vector candidates fetched before rerank |
+| `RAG_RERANK_TOP_K` | `3` | Chunks kept after rerank (fed to Groq) |
 
 Never commit `.env`.
 
@@ -100,12 +103,14 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 - Chunking uses `SentenceSplitter` (`RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`, default 512/64). After changing either, call `POST /rag/rebuild`.
 - `/rag` = LlamaIndex chat engine end-to-end (`CONDENSE_PLUS_CONTEXT`).
 - `/rag-hybrid` = LlamaIndex retrieval only, then LangChain/Groq writes the final answer. Response also includes `retrieval_query` so you can inspect what got sent to retrieval.
+- `/rag-hybrid` reranking: fetch `RAG_RETRIEVE_TOP_K` by embedding, reorder by keyword overlap, keep `RAG_RERANK_TOP_K`. Response includes `rerank_applied`.
 
 ### Phase 6 (ops)
 
 - Structured request logs: `request_id`, method, path, status, `latency_ms` (see uvicorn console). Responses include `X-Request-Id`.
 - Rate limit: `RATE_LIMIT_PER_MINUTE` on `/chat*` and `/rag*` → HTTP `429` + `Retry-After`.
 - LLM timeout: `GROQ_TIMEOUT_SECONDS` on ChatGroq / LlamaIndex Groq → HTTP `504` (friendly message).
+- pgvector index tuning: backend auto-creates a cosine index on `vecs.ai_chat_docs` after ingest/load to reduce query warnings and improve retrieval speed.
 
 ## Vector store: Supabase + pgvector
 

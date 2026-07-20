@@ -9,9 +9,10 @@ Compare two RAG styles side by side:
 Per-request flow for /rag-hybrid:
   1. Load session history (optional client `history` rehydrates after reload)
   2. LangChain/Groq condenses follow-ups into a standalone retrieval query
-  3. LlamaIndex retriever searches Supabase pgvector (top-k=3)
-  4. LangChain/Groq answers using retrieved chunks + chat history
-  5. Save turn to hybrid_rag_sessions; return answer, sources, retrieval_query
+  3. LlamaIndex retriever searches Supabase pgvector (top-k=6 by default)
+  4. Keyword rerank reorders candidates, keeps top-3 for the prompt
+  5. LangChain/Groq answers using retrieved chunks + chat history
+  6. Save turn to hybrid_rag_sessions; return answer, sources, retrieval_query
 
 `retrieval_query` in the response is intentional — inspect what actually got
 embedded/searched (useful when the user says "who set it?" after a prior turn).
@@ -19,6 +20,8 @@ embedded/searched (useful when the user says "who set it?" after a prior turn).
 
 from __future__ import annotations
 
+import os
+import re
 from collections.abc import Callable, Sequence
 
 from fastapi import APIRouter, HTTPException
@@ -26,6 +29,17 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from llama_index.core import VectorStoreIndex
 from llama_index.core.schema import NodeWithScore
 from pydantic import BaseModel, Field
+
+# Reranking (learning step): vector search returns candidates; rerank reorders them.
+# Fetch more than we need, then keep the best after a second scoring pass.
+RAG_RERANK_ENABLED = os.getenv("RAG_RERANK_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+RAG_RETRIEVE_TOP_K = int(os.getenv("RAG_RETRIEVE_TOP_K", "6"))
+RAG_RERANK_TOP_K = int(os.getenv("RAG_RERANK_TOP_K", "3"))
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 # =============================================================================
@@ -47,6 +61,7 @@ class RagHybridResponse(BaseModel):
     answer: str
     sources: list[str]  # chunk previews (reuses main._format_rag_sources via injection)
     retrieval_query: str  # what LlamaIndex actually searched — key for learning/debugging
+    rerank_applied: bool = False  # True when keyword rerank ran after vector retrieval
 
 
 # =============================================================================
@@ -138,6 +153,52 @@ def _context_from_nodes(source_nodes: Sequence[NodeWithScore]) -> str:
         if text:
             parts.append(f"[Chunk {idx}]\n{text}")
     return "\n\n".join(parts)
+
+
+def _query_tokens(query: str) -> set[str]:
+    """Simple tokenizer for keyword rerank (no NLP deps)."""
+    return {t for t in _TOKEN_RE.findall(query.lower()) if len(t) >= 2}
+
+
+def _keyword_overlap_score(query: str, chunk_text: str) -> float:
+    """
+    Fraction of query tokens found in chunk text.
+
+    Example: query "DataSync PostgreSQL" → chunk mentioning both scores higher
+    than a generic "company mission" chunk that vector search ranked first.
+    """
+    tokens = _query_tokens(query)
+    if not tokens:
+        return 0.0
+    haystack = chunk_text.lower()
+    hits = sum(1 for token in tokens if token in haystack)
+    return hits / len(tokens)
+
+
+def rerank_nodes_by_keywords(
+    query: str,
+    nodes: Sequence[NodeWithScore],
+    *,
+    top_k: int,
+) -> list[NodeWithScore]:
+    """
+    Rerank vector candidates by keyword overlap with the retrieval query.
+
+    Tie-break: keep original vector order (lower index = better embedding rank).
+    Returns a new list; does not mutate input nodes.
+    """
+    if not nodes:
+        return []
+
+    scored: list[tuple[float, int, NodeWithScore]] = []
+    for idx, node in enumerate(nodes):
+        text = node.node.get_content()
+        score = _keyword_overlap_score(query, text)
+        scored.append((score, -idx, node))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    keep = max(1, top_k)
+    return [node for _, _, node in scored[:keep]]
 
 
 def _condense_question(
@@ -237,8 +298,17 @@ def create_rag_hybrid_router(
             )
 
             # --- LlamaIndex: retrieve only (no chat engine) ---
-            retriever = get_rag_index().as_retriever(similarity_top_k=3)
+            retrieve_k = RAG_RETRIEVE_TOP_K if RAG_RERANK_ENABLED else RAG_RERANK_TOP_K
+            retriever = get_rag_index().as_retriever(similarity_top_k=retrieve_k)
             source_nodes = retriever.retrieve(retrieval_query)
+            rerank_applied = False
+            if RAG_RERANK_ENABLED and len(source_nodes) > 1:
+                source_nodes = rerank_nodes_by_keywords(
+                    retrieval_query,
+                    source_nodes,
+                    top_k=RAG_RERANK_TOP_K,
+                )
+                rerank_applied = True
             context = _context_from_nodes(source_nodes)
 
             # --- LangChain: grounded answer ---
@@ -255,6 +325,7 @@ def create_rag_hybrid_router(
                 answer=answer,
                 sources=format_sources(source_nodes),
                 retrieval_query=retrieval_query,
+                rerank_applied=rerank_applied,
             )
         except HTTPException:
             raise
