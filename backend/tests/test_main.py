@@ -10,6 +10,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
+import httpx
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
@@ -343,6 +344,39 @@ class MainRoutesTest(unittest.TestCase):
             insert_document.assert_called_once_with(index, uploaded)
         finally:
             uploaded.unlink(missing_ok=True)
+
+    def test_health_includes_phase6_flags(self) -> None:
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("groq_timeout_seconds", data)
+        self.assertIn("rate_limit_per_minute", data)
+        self.assertIn("X-Request-Id", response.headers)
+
+    def test_is_llm_timeout(self) -> None:
+        self.assertTrue(main._is_llm_timeout(TimeoutError()))
+        self.assertTrue(main._is_llm_timeout(httpx.TimeoutException("slow")))
+        self.assertFalse(main._is_llm_timeout(ValueError("nope")))
+
+    def test_rate_limit_returns_429(self) -> None:
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+
+        from ops import RateLimitMiddleware
+
+        async def ok(_request):
+            return PlainTextResponse("ok")
+
+        tiny = Starlette(routes=[Route("/chat", ok, methods=["POST"])])
+        tiny.add_middleware(RateLimitMiddleware, max_per_minute=2)
+        client = TestClient(tiny)
+
+        self.assertEqual(client.post("/chat").status_code, 200)
+        self.assertEqual(client.post("/chat").status_code, 200)
+        limited = client.post("/chat")
+        self.assertEqual(limited.status_code, 429)
+        self.assertIn("Rate limit", limited.json()["detail"])
 
 
 if __name__ == "__main__":

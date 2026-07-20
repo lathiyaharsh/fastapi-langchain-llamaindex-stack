@@ -211,9 +211,9 @@ Key difference: with `create_agent`, you pass `{"messages": [...]}` and read the
 
 ## Phase 6 — Quality & production basics
 
-- [ ] Add structured logging
-- [ ] Add rate limiting on chat / rag routes
-- [ ] Add timeouts for LLM calls
+- [x] Add structured logging
+- [x] Add rate limiting on chat / rag routes
+- [x] Add timeouts for LLM calls
 - [x] Hide raw provider errors from clients (friendly messages)
 - [x] Write at least 2–3 unit tests (validation, health, one service function)
 - [x] Add a `requirements.txt` (or `pyproject.toml`) with pinned versions
@@ -221,7 +221,7 @@ Key difference: with `create_agent`, you pass `{"messages": [...]}` and read the
 - [x] Configure Pyright/basedpyright to use `backend/.venv` (fixes “import could not be resolved”)
 - [ ] (Optional) Dockerize the FastAPI service
 
-> Note: Next.js rate-limits at `/api/*`. FastAPI errors are sanitized for chat/RAG streams. Backend `unittest` covers health, history sync, weather tool, **`invoke_chat_with_agent`**, manual tool loop, source filtering, session clear, URL normalize, upload.
+> Note: Next.js rate-limits at `/api/*`. FastAPI also rate-limits `/chat*` + `/rag*` (`RATE_LIMIT_PER_MINUTE`). Errors are sanitized (502/504). Request logs + `X-Request-Id` in `ops.py`. Backend `unittest` covers health, history sync, weather tool, **`invoke_chat_with_agent`**, manual tool loop, source filtering, session clear, URL normalize, upload, **rate limit 429**, timeout helper.
 
 ---
 
@@ -836,15 +836,17 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 | 2026-07-20 | Apply: `/rag` vs `/rag-hybrid` same Q + follow-up | Hybrid exposes `retrieval_query`; both grounded BANANA-42, no invented “who set it” |
 | 2026-07-20 | Apply: `SentenceSplitter(512,64)` + `/rag/rebuild` | Env `RAG_CHUNK_SIZE`/`OVERLAP`; rebuild returns chunk knobs; fridge still retrieves |
 | 2026-07-20 | Apply: temperature A/B on `/chat` | Optional `temperature`; slogans vary at 1.0; `17*19` stayed 323 at 0 and 1 |
+| 2026-07-20 | Phase 6: logging + rate limit + LLM timeout | `ops.py`; `GROQ_TIMEOUT_SECONDS`; `RATE_LIMIT_PER_MINUTE`; 429/504 |
 
 ---
 
 ## Current focus
 
-> **Done:** Applied Parts 1–4 + temperature — `/rag` vs hybrid, chunking, temp A/B on `/chat`.
+> **Done:** Phase 6 core — structured logs, rate limits, Groq timeouts (Docker still optional).
 
 **Next options**
 
-1. **Tweak chunk knobs** — try `RAG_CHUNK_SIZE=256` + rebuild; watch `sources` change
-2. **Phase 6** — logging, rate limits, LLM timeouts (production polish)
-3. **Reranking / eval** — deeper RAG quality topics
+1. **Dockerize** FastAPI (optional Phase 6)
+2. **Tweak chunk knobs** — `RAG_CHUNK_SIZE=256` + rebuild
+3. **Reranking / RAG eval** — deeper quality topics
+4. **Split routers** — `routers/chat.py`, `routers/rag.py`

@@ -40,6 +40,8 @@ Edit `.env` and set at least `GROQ_API_KEY`. For Ask My Docs, also set `HUGGINGF
 | `GROQ_API_KEY` | — | Groq LLM for chat and RAG |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Chat / RAG model name |
 | `GROQ_TEMPERATURE` | `0.7` | Default sampling temp; override per `/chat` request |
+| `GROQ_TIMEOUT_SECONDS` | `60` | Groq HTTP timeout → HTTP 504 on hang |
+| `RATE_LIMIT_PER_MINUTE` | `60` | Per-IP limit on `/chat*` + `/rag*` (`0` disables) |
 | `HUGGINGFACE_API_KEY` | — | Cloud embeddings (no local torch) |
 | `HF_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model |
 | `HF_EMBED_DIM` | `384` | Must match Supabase collection dim |
@@ -98,6 +100,12 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 - Chunking uses `SentenceSplitter` (`RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`, default 512/64). After changing either, call `POST /rag/rebuild`.
 - `/rag` = LlamaIndex chat engine end-to-end (`CONDENSE_PLUS_CONTEXT`).
 - `/rag-hybrid` = LlamaIndex retrieval only, then LangChain/Groq writes the final answer. Response also includes `retrieval_query` so you can inspect what got sent to retrieval.
+
+### Phase 6 (ops)
+
+- Structured request logs: `request_id`, method, path, status, `latency_ms` (see uvicorn console). Responses include `X-Request-Id`.
+- Rate limit: `RATE_LIMIT_PER_MINUTE` on `/chat*` and `/rag*` → HTTP `429` + `Retry-After`.
+- LLM timeout: `GROQ_TIMEOUT_SECONDS` on ChatGroq / LlamaIndex Groq → HTTP `504` (friendly message).
 
 ## Vector store: Supabase + pgvector
 

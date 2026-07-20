@@ -43,6 +43,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
 from rag_hybrid import create_rag_hybrid_router, hybrid_rag_sessions
+from ops import (
+    RateLimitMiddleware,
+    RequestLoggingMiddleware,
+    configure_logging,
+)
 
 # --- LangChain: orchestrates chat, prompts, memory, tools ---
 from langchain_groq import ChatGroq
@@ -87,6 +92,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 # Sampling randomness (Part 3 apply): 0 ≈ focused, 0.7 default, 1.0+ more varied
 GROQ_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.7"))
+# Phase 6: fail hung Groq calls instead of waiting forever
+GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "60"))
+# Phase 6: per-IP sliding window on /chat* and /rag* (0 = disable)
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 HF_EMBED_MODEL = os.getenv("HF_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
@@ -285,7 +294,11 @@ def _insert_uploaded_document(index: VectorStoreIndex, path: Path) -> None:
 def _configure_llm_and_embeddings() -> None:
     """Set global LlamaIndex defaults used by RAG query + ingest."""
     # Groq answers the final question after retrieval
-    Settings.llm = Groq(api_key=GROQ_API_KEY, model=GROQ_MODEL)
+    Settings.llm = Groq(
+        api_key=GROQ_API_KEY,
+        model=GROQ_MODEL,
+        timeout=GROQ_TIMEOUT_SECONDS,
+    )
     # HF Inference API turns text chunks into vectors (remote, no torch)
     Settings.embed_model = HuggingFaceInferenceAPIEmbedding(
         model_name=HF_EMBED_MODEL,
@@ -630,6 +643,7 @@ def get_model(*, temperature: float | None = None) -> ChatGroq:
         ),  # Pydantic SecretStr — type checker expects this
         model=GROQ_MODEL,
         temperature=temp,
+        timeout=GROQ_TIMEOUT_SECONDS,  # pydantic alias → request_timeout
     )
 
 
@@ -902,9 +916,27 @@ def remember(session_id: str, human: str, ai: str) -> None:
     chat_sessions[session_id] = history[-20:]
 
 
+def _is_llm_timeout(exc: BaseException) -> bool:
+    """True for hung Groq / HTTP client timeouts (Phase 6)."""
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        return True
+    name = type(exc).__name__.lower()
+    return "timeout" in name
+
+
+def _http_error_for_llm(exc: BaseException, *, kind: str = "LLM") -> HTTPException:
+    if _is_llm_timeout(exc):
+        return HTTPException(
+            status_code=504,
+            detail=f"{kind} request timed out after {GROQ_TIMEOUT_SECONDS:.0f}s",
+        )
+    return HTTPException(status_code=502, detail=f"{kind} request failed")
+
+
 # =============================================================================
 # FASTAPI APP
 # =============================================================================
+configure_logging()
 app = FastAPI(title="AI Chat Learning Backend")
 app.include_router(
     create_rag_hybrid_router(
@@ -927,6 +959,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Phase 6: rate limit chat/RAG (added before logging so 429s are still logged)
+if RATE_LIMIT_PER_MINUTE > 0:
+    app.add_middleware(RateLimitMiddleware, max_per_minute=RATE_LIMIT_PER_MINUTE)
+app.add_middleware(RequestLoggingMiddleware)
 
 
 # =============================================================================
@@ -994,6 +1030,8 @@ def health():
         ),
         "groq_model": GROQ_MODEL,
         "groq_temperature": GROQ_TEMPERATURE,
+        "groq_timeout_seconds": GROQ_TIMEOUT_SECONDS,
+        "rate_limit_per_minute": RATE_LIMIT_PER_MINUTE,
         "hf_embed_model": HF_EMBED_MODEL,
         "supabase_collection": SUPABASE_COLLECTION,
         "chat_tools": [item.name for item in CHAT_TOOLS],
@@ -1045,7 +1083,7 @@ def chat(request: ChatRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="LLM request failed") from exc
+        raise _http_error_for_llm(exc, kind="LLM") from exc
 
     return ChatResponse(reply=reply)
 
@@ -1095,8 +1133,14 @@ async def chat_stream(request: Request, body: ChatRequest):
             # Only persist full replies — not partial streams after Stop.
             remember(body.session_id, message, "".join(parts))
             yield "data: [DONE]\n\n"
-        except Exception:
-            yield "data: [ERROR] LLM request failed\n\n"
+        except Exception as exc:
+            if _is_llm_timeout(exc):
+                yield (
+                    f"data: [ERROR] LLM request timed out after "
+                    f"{GROQ_TIMEOUT_SECONDS:.0f}s\n\n"
+                )
+            else:
+                yield "data: [ERROR] LLM request failed\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -1149,7 +1193,7 @@ def rag(request: RagRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="RAG request failed") from exc
+        raise _http_error_for_llm(exc, kind="RAG") from exc
 
 
 @app.delete("/rag/session/{session_id}")
