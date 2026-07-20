@@ -940,6 +940,74 @@ Light apply on `/rag-hybrid`:
 
 ---
 
+## Agents vs chains (deeper learning)
+
+### Plain chain (no agent)
+
+```text
+prompt → LLM → text answer
+```
+
+One model call. Good for: math, rewriting, “explain X”, anything that needs **no external action**.
+
+### Tool-calling loop (what people call an “agent” here)
+
+```text
+prompt → LLM
+       ↘ tool_calls? → run tool(s) → ToolMessage → LLM again → …
+       ↘ text?       → done
+```
+
+The model **decides** whether to call `get_weather`. Your backend **executes** the tool. Groq never hits Open-Meteo itself.
+
+### Your two harnesses (same tool)
+
+| | `/chat` | `/chat/stream` (UI) |
+| --- | --- | --- |
+| Pattern | `create_agent` (LangGraph loop) | Manual `bind_tools` + `for` loop |
+| Who runs the loop? | Library | You (`astream_chat_with_tools`, max 5 rounds) |
+| Output | One JSON `reply` | SSE tokens |
+| Best for learning | Less boilerplate | See every tool round |
+
+Both use the same `@tool get_weather` and the same system nudge.
+
+### When *not* to use an agent
+
+| Situation | Prefer |
+| --- | --- |
+| Doc Q&A from `data/` | **RAG** (`/rag`), not chat tools |
+| Pure reasoning / formatting | Plain LLM (no tools bound) |
+| Live weather / APIs / calculators | Tool loop |
+| Multi-step “look up then decide” | Agent / tool loop |
+
+Light apply (2026-07-20):
+
+| Case | Result |
+| --- | --- |
+| `2+2` on both endpoints | `4` — no tool needed |
+| Weather in London | Both returned ~20.4°C clear sky — tool ran |
+| Fridge password via `/chat` only | **“I don't know.”** — no RAG, no inventing `BANANA-42` |
+
+Lesson: **tools ≠ document memory**. Weather tool doesn’t make the model know lab secrets; RAG does.
+
+### Failure modes to watch
+
+| Failure | What happens | Your mitigation |
+| --- | --- | --- |
+| Infinite tool calls | Model keeps requesting tools | `MAX_CHAT_TOOL_ROUNDS = 5` |
+| Tool error | Bad location / HTTP fail | `fetch_weather` returns error string → model can apologize |
+| Blank UI ~1–2s | Tool round before first token | Expected on `/chat/stream` |
+| Middleware `latency_ms` short on SSE | Times until stream **starts**, not finishes | Time client-side or script wall clock |
+
+### Checklist
+
+- [x] Chain = single LLM call; agent/tool-loop = LLM may call tools then answer
+- [x] `create_agent` vs manual loop mapped to `/chat` vs `/chat/stream`
+- [x] Know when RAG beats tools (and when tools beat RAG)
+- [x] Light apply: math / weather / no-hallucinate fridge via chat
+
+---
+
 ## Progress log
 
 | Date | What I finished | Blockers / learnings |
@@ -980,16 +1048,17 @@ Light apply on `/rag-hybrid`:
 | 2026-07-20 | Latency profile: `rag_eval.py --profile` | 5 Q × `/rag`+`/rag-hybrid`; `/rag` ~1.5s avg, hybrid ~1.9s (+~322ms); fixed router `request` annotation 422 |
 | 2026-07-20 | Rerank theory + light A/B | Keyword vs cross-encoder notes; DataSync demo scores; on/off compare via `rerank_applied` |
 | 2026-07-20 | Memory & context deep-dive + light apply | Server vs client history; separate chat/rag/hybrid stores; condense needs prior turn |
+| 2026-07-20 | Agents vs chains deeper + light apply | Math (no tool) / weather (tool) / chat≠RAG; mapped create_agent vs manual loop |
 
 ---
 
 ## Current focus
 
-> **Done:** Memory & context — who remembers what (weights / context / sessions / vectors).
+> **Done:** Agents vs chains — when to use a tool loop vs plain LLM vs RAG.
 
 **Next learning options**
 
-1. **Agents vs chains (deeper)** — when `create_agent` helps vs hurts; tool-loop failure modes
-2. **Write your own mental-model diagram** of `/rag-hybrid` (condense → retrieve → rerank → answer)
-3. **Cross-encoder (optional later)** — only after keyword rerank feels clear
-4. **Persist history (optional)** — Redis/SQLite when you want durability, not for core LLM theory
+1. **Draw `/rag-hybrid` mental-model diagram** in your own words (condense → retrieve → rerank → answer)
+2. **Prompting patterns** — system vs few-shot vs grounded RAG prompts in this codebase
+3. **Cross-encoder (optional later)** — model-based rerank after keyword is clear
+4. **Second tool (optional)** — only if you want multi-tool agent practice
