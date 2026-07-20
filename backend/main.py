@@ -70,9 +70,10 @@ from llama_index.embeddings.huggingface_api import HuggingFaceInferenceAPIEmbedd
 
 # Persist vectors in Supabase Postgres (pgvector) instead of RAM only
 from llama_index.vector_stores.supabase import SupabaseVectorStore
-from llama_index.core.schema import NodeWithScore
+from llama_index.core.schema import NodeWithScore, TransformComponent
 from llama_index.core.chat_engine.types import BaseChatEngine, ChatMode
 from llama_index.core.llms import ChatMessage as LIChatMessage, MessageRole
+from llama_index.core.node_parser import SentenceSplitter
 
 # vecs — low-level client used to delete Supabase collections on /rag/rebuild
 import vecs
@@ -108,6 +109,11 @@ MAX_UPLOAD_BYTES = int(os.getenv("RAG_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024)))
 # scores are ~1-exp(-distance) (lower = better), so a "min similarity" cutoff
 # drops the best matches and yields Empty Response.
 RAG_SOURCE_SCORE_GAP = float(os.getenv("RAG_SOURCE_SCORE_GAP", "0.08"))
+
+# Chunking knobs (Part 4 apply experiment) — change + POST /rag/rebuild to compare.
+# Defaults match the learning-doc experiment: SentenceSplitter(512, 64).
+RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "512"))
+RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "64"))
 
 # Prompt for CONDENSE_PLUS_CONTEXT — uses docs AND chat history
 RAG_CONTEXT_PROMPT = """\
@@ -232,6 +238,19 @@ def _save_upload_to_data_dir(file: UploadFile) -> Path:
     return dest
 
 
+def _rag_text_splitter() -> SentenceSplitter:
+    """Split docs into embeddable chunks (Part 4 — size/overlap trade-offs)."""
+    return SentenceSplitter(
+        chunk_size=RAG_CHUNK_SIZE,
+        chunk_overlap=RAG_CHUNK_OVERLAP,
+    )
+
+
+def _rag_transformations() -> list[TransformComponent]:
+    """Ingest pipeline steps shared by rebuild and upload."""
+    return [_rag_text_splitter()]
+
+
 def _insert_uploaded_document(index: VectorStoreIndex, path: Path) -> None:
     """Embed and insert only one new file into the existing Supabase index."""
     documents = SimpleDirectoryReader(
@@ -242,11 +261,13 @@ def _insert_uploaded_document(index: VectorStoreIndex, path: Path) -> None:
     if not documents:
         raise HTTPException(status_code=400, detail="No document content found")
 
+    # Same splitter as rebuild — otherwise uploads would use LlamaIndex defaults.
+    nodes = _rag_text_splitter().get_nodes_from_documents(documents)
+
     last_error: Exception | None = None
     for attempt in range(1, 4):
         try:
-            for document in documents:
-                index.insert(document)
+            index.insert_nodes(nodes)
             # Cached RAG engines were built against the old index state — drop them.
             rag_sessions.clear()
             return
@@ -270,6 +291,8 @@ def _configure_llm_and_embeddings() -> None:
         timeout=60.0,
         pooling=None,
     )
+    # Explicit chunking (was LlamaIndex default until this apply experiment)
+    Settings.transformations = _rag_transformations()
 
 
 def _delete_supabase_collection() -> None:
@@ -343,7 +366,9 @@ def _build_rag_index(*, force_rebuild: bool = False) -> VectorStoreIndex:
     for attempt in range(1, 4):
         try:
             return VectorStoreIndex.from_documents(
-                docs, storage_context=storage_context
+                docs,
+                storage_context=storage_context,
+                transformations=_rag_transformations(),
             )
         except Exception as exc:
             last_error = exc
@@ -366,6 +391,7 @@ def get_rag_index(*, force_rebuild: bool = False) -> VectorStoreIndex:
     if force_rebuild:
         # Old chat engines still point at the previous index — drop them all
         rag_sessions.clear()
+        hybrid_rag_sessions.clear()
 
     if not GROQ_API_KEY or GROQ_API_KEY.startswith("your_"):
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured")
@@ -1132,6 +1158,8 @@ def rag_rebuild():
             "collection": SUPABASE_COLLECTION,
             "data_dir": str(DATA_DIR),
             "files_seen": file_count,
+            "chunk_size": RAG_CHUNK_SIZE,
+            "chunk_overlap": RAG_CHUNK_OVERLAP,
         }
     except HTTPException:
         raise

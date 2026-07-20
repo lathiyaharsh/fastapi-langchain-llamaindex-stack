@@ -332,7 +332,7 @@ The **context window** is the max tokens in one API call: everything you send **
 
 **Chunking** = splitting documents into smaller pieces before embedding and storing in the vector DB.
 
-Flow in this project: `SimpleDirectoryReader` → `VectorStoreIndex.from_documents()` → LlamaIndex default splitter → HF embeddings → Supabase pgvector → retrieve top-k at query time.
+Flow in this project: `SimpleDirectoryReader` → `SentenceSplitter(512, 64)` → embed → Supabase pgvector → retrieve top-k at query time.
 
 **Why chunk at all?**
 
@@ -348,11 +348,12 @@ Flow in this project: `SimpleDirectoryReader` → `VectorStoreIndex.from_documen
 | Risk: answer needs info split across chunks | Risk: irrelevant filler dilutes the prompt |
 | More rows in Supabase | Fewer rows, cheaper storage |
 
-**Knobs in this project (today vs future)**
+**Knobs in this project**
 
 | Knob | Current value | Effect |
 | --- | --- | --- |
-| LlamaIndex default splitter | implicit in `from_documents()` | ~1024-token chunks, small overlap (library default) |
+| `RAG_CHUNK_SIZE` | `512` | `SentenceSplitter` max chunk size |
+| `RAG_CHUNK_OVERLAP` | `64` | Shared text between neighbor chunks |
 | `similarity_top_k` | `3` | How many chunks enter `RAG_CONTEXT_PROMPT` |
 | `RAG_SOURCE_SCORE_GAP` | `0.08` | Filters weak source previews in API response |
 | `HF_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding quality vs speed/cost |
@@ -365,7 +366,7 @@ Flow in this project: `SimpleDirectoryReader` → `VectorStoreIndex.from_documen
 | Wrong / vague RAG answers | Chunk too big or weak retrieval | Lower chunk size, raise `top_k` slightly, tune score gap |
 | Irrelevant doc snippets in `sources` | Broad chunk retrieved | Tighter chunks, lower `top_k`, stricter score gap |
 
-**Chunking is not one-size-fits-all** — tune for your doc shape (short notes vs long manuals). For learning, defaults are fine; Phase 4 hybrid RAG is a good place to experiment with explicit `SentenceSplitter(chunk_size=..., chunk_overlap=...)`.
+**Chunking is not one-size-fits-all** — tune for your doc shape (short notes vs long manuals). Change `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` then `POST /rag/rebuild`.
 
 ---
 
@@ -731,11 +732,11 @@ Your `data/` files are short, so defaults work well — chunking still matters a
 #### 4b. What your project does today
 
 ```text
-SimpleDirectoryReader → VectorStoreIndex.from_documents(docs)
+SimpleDirectoryReader → SentenceSplitter(chunk_size=512, chunk_overlap=64)
+  → VectorStoreIndex.from_documents(..., transformations=[splitter])
 ```
 
-No explicit `SentenceSplitter` yet → LlamaIndex **default** node parser (roughly ~1024-token chunks, small overlap — library default).  
-After change: call `POST /rag/rebuild` or vectors stay stale.
+Env: `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`. After change: call `POST /rag/rebuild` or vectors stay stale.
 
 #### 4c. Knobs that matter
 
@@ -763,13 +764,14 @@ With overlap, both neighbors may still contain "BANANA-42"
 | Good answer, weird `sources` | Weak neighbors near best hit | Tighten `RAG_SOURCE_SCORE_GAP` |
 | After editing `.md`, old answers | Vectors not rebuilt | `POST /rag/rebuild` |
 
-#### 4f. Optional experiment (when you want to code)
+#### 4f. Chunking experiment (applied)
 
 ```python
 from llama_index.core.node_parser import SentenceSplitter
 
 splitter = SentenceSplitter(chunk_size=512, chunk_overlap=64)
-# pass via transformations=... into from_documents, then /rag/rebuild
+# Wired in main.py via RAG_CHUNK_SIZE / RAG_CHUNK_OVERLAP → transformations=
+# After changing env or defaults: POST /rag/rebuild
 ```
 
 Compare the same question before/after; inspect `/rag-hybrid` `retrieval_query` + `sources`.
@@ -787,9 +789,10 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 
 - [x] Chunk = unit of embedding + retrieval
 - [x] size / overlap / top_k trade-offs
-- [x] Project uses LlamaIndex default splitter until you set one
+- [x] Project uses `SentenceSplitter` (`RAG_CHUNK_SIZE`/`OVERLAP`, default 512/64)
 - [x] Rebuild required after changing docs or splitter
 - [x] Bad RAG often starts at chunk boundaries, not “the LLM is dumb”
+- [x] Applied: wired splitter + rebuild; compared `/rag` vs `/rag-hybrid`
 
 ---
 
@@ -821,16 +824,17 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 | 2026-07-17 | Part 3: next-token, temperature, context as working memory | Mapped to `temperature=0.7`, SSE stream, `remember()[-20]`, `top_k=3`, tool delay |
 | 2026-07-17 | Part 4: chunking for RAG | Default LlamaIndex splitter; size/overlap/top_k; rebuild after doc/splitter changes; symptoms→fixes |
 | 2026-07-17 | Explored Google Intro to ML + tokenization, word embeddings, Transformers | Mapped to data prep / tokens / bge-small / Groq; GFG NN guide already logged |
+| 2026-07-20 | Apply: `/rag` vs `/rag-hybrid` same Q + follow-up | Hybrid exposes `retrieval_query`; both grounded BANANA-42, no invented “who set it” |
+| 2026-07-20 | Apply: `SentenceSplitter(512,64)` + `/rag/rebuild` | Env `RAG_CHUNK_SIZE`/`OVERLAP`; rebuild returns chunk knobs; fridge still retrieves |
 
 ---
 
 ## Current focus
 
-> **Done:** Embeddings & vector search for RAG internals; also explored Google Intro to ML, tokenization, word embeddings, Transformer architecture (with GFG NN basics).
+> **Done:** Applied Parts 1–4 — compared `/rag` vs `/rag-hybrid`; wired explicit chunking + rebuild.
 
 **Next options**
 
-1. **Apply it** — same question on `/rag` vs `/rag-hybrid`; narrate with Parts 1–4 vocabulary
-2. **Code experiment** — `SentenceSplitter(chunk_size=512, chunk_overlap=64)` + `/rag/rebuild`
-3. **Try temperature** — change `get_model()` temp and compare factual vs creative replies
-4. **Phase 6** — logging, rate limits, LLM timeouts (production polish)
+1. **Try temperature** — change `get_model()` temp (`0.0` vs `1.0`) and compare factual vs creative replies
+2. **Tweak chunk knobs** — try `RAG_CHUNK_SIZE=256` + rebuild; watch `sources` change on handbook questions
+3. **Phase 6** — logging, rate limits, LLM timeouts (production polish)

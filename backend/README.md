@@ -46,6 +46,8 @@ Edit `.env` and set at least `GROQ_API_KEY`. For Ask My Docs, also set `HUGGINGF
 | `SUPABASE_COLLECTION` | `ai_chat_docs` | Vector collection name |
 | `RAG_MAX_UPLOAD_BYTES` | `2097152` (2 MB) | Upload size limit |
 | `RAG_SOURCE_SCORE_GAP` | `0.08` | Filter weak RAG source chunks |
+| `RAG_CHUNK_SIZE` | `512` | SentenceSplitter chunk size (tokens-ish) |
+| `RAG_CHUNK_OVERLAP` | `64` | Overlap between chunks; change + `/rag/rebuild` |
 
 Never commit `.env`.
 
@@ -92,6 +94,7 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 - Vectors live in **Supabase Postgres (pgvector)**, not only in memory.
 - Source files live in `backend/data/`. After editing them, call `POST /rag/rebuild`.
 - Upload accepts `.md` / `.txt` only; duplicate filenames return `409`.
+- Chunking uses `SentenceSplitter` (`RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`, default 512/64). After changing either, call `POST /rag/rebuild`.
 - `/rag` = LlamaIndex chat engine end-to-end (`CONDENSE_PLUS_CONTEXT`).
 - `/rag-hybrid` = LlamaIndex retrieval only, then LangChain/Groq writes the final answer. Response also includes `retrieval_query` so you can inspect what got sent to retrieval.
 
