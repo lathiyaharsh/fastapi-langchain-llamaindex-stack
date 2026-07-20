@@ -39,6 +39,7 @@ Edit `.env` and set at least `GROQ_API_KEY`. For Ask My Docs, also set `HUGGINGF
 | --- | --- | --- |
 | `GROQ_API_KEY` | — | Groq LLM for chat and RAG |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Chat / RAG model name |
+| `GROQ_TEMPERATURE` | `0.7` | Default sampling temp; override per `/chat` request |
 | `HUGGINGFACE_API_KEY` | — | Cloud embeddings (no local torch) |
 | `HF_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model |
 | `HF_EMBED_DIM` | `384` | Must match Supabase collection dim |

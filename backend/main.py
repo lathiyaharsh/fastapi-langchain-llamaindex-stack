@@ -85,6 +85,8 @@ load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+# Sampling randomness (Part 3 apply): 0 ≈ focused, 0.7 default, 1.0+ more varied
+GROQ_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.7"))
 
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 HF_EMBED_MODEL = os.getenv("HF_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
@@ -613,26 +615,28 @@ CHAT_TOOL_BY_NAME = {item.name: item for item in CHAT_TOOLS}
 # =============================================================================
 # CHAT HELPERS — LangChain + Groq
 # =============================================================================
-def get_model() -> ChatGroq:
+def get_model(*, temperature: float | None = None) -> ChatGroq:
     """Create Groq chat model for /chat endpoints."""
     if not GROQ_API_KEY or GROQ_API_KEY.startswith("your_"):
         raise HTTPException(
             status_code=500,
             detail="GROQ_API_KEY is not configured in backend/.env",
         )
+    # Per-request override (Swagger A/B) else env / default 0.7
+    temp = GROQ_TEMPERATURE if temperature is None else temperature
     return ChatGroq(
         api_key=SecretStr(
             GROQ_API_KEY
         ),  # Pydantic SecretStr — type checker expects this
         model=GROQ_MODEL,
-        temperature=0.7,  # higher = more creative; lower = more focused
+        temperature=temp,
     )
 
 
-def get_model_with_tools() -> ChatGroq:
+def get_model_with_tools(*, temperature: float | None = None) -> ChatGroq:
     """Groq chat model with weather tool bound for tool-calling."""
     # bind_tools returns a Runnable; ChatGroq type is close enough for our use.
-    return get_model().bind_tools(CHAT_TOOLS)  # type: ignore[return-value]
+    return get_model(temperature=temperature).bind_tools(CHAT_TOOLS)  # type: ignore[return-value]
 
 
 def chat_system_prompt(reply_mode: str = "concise") -> str:
@@ -649,7 +653,7 @@ def chat_system_prompt(reply_mode: str = "concise") -> str:
     )
 
 
-def get_chat_agent(reply_mode: str = "concise"):
+def get_chat_agent(reply_mode: str = "concise", *, temperature: float | None = None):
     """
     LangChain create_agent graph for POST /chat (non-streaming).
 
@@ -657,7 +661,7 @@ def get_chat_agent(reply_mode: str = "concise"):
     loop for you — useful to compare with invoke_chat_with_tools / astream.
     """
     return create_agent(
-        get_model(),
+        get_model(temperature=temperature),
         tools=CHAT_TOOLS,
         system_prompt=chat_system_prompt(reply_mode),
     )
@@ -703,7 +707,11 @@ def _tool_call_id(tool_call: object) -> str:
 
 
 def invoke_chat_with_agent(
-    session_id: str, message: str, reply_mode: str = "concise"
+    session_id: str,
+    message: str,
+    reply_mode: str = "concise",
+    *,
+    temperature: float | None = None,
 ) -> str:
     """
     POST /chat path: LangChain create_agent (automatic tool loop).
@@ -712,7 +720,7 @@ def invoke_chat_with_agent(
     the agent itself (not duplicated as SystemMessage in the list).
     """
     history = chat_sessions.setdefault(session_id, [])
-    agent = get_chat_agent(reply_mode)
+    agent = get_chat_agent(reply_mode, temperature=temperature)
     result = agent.invoke(
         cast(Any, {"messages": [*history, HumanMessage(content=message)]})
     )
@@ -751,6 +759,8 @@ def invoke_chat_with_tools(messages: list[BaseMessage]) -> str:
 
 async def astream_chat_with_tools(
     messages: list[BaseMessage],
+    *,
+    temperature: float | None = None,
 ) -> AsyncIterator[str]:
     """
     Tool-calling loop for POST /chat/stream.
@@ -760,7 +770,7 @@ async def astream_chat_with_tools(
       - we run get_weather (two HTTP calls to Open-Meteo)
     Only the final answer round yields text tokens to SSE.
     """
-    model = get_model_with_tools()
+    model = get_model_with_tools(temperature=temperature)
     conversation = list(messages)
 
     for _ in range(MAX_CHAT_TOOL_ROUNDS):
@@ -926,6 +936,8 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     session_id: str = Field(default="default", min_length=1, max_length=64)
     reply_mode: str = Field(default="concise", pattern="^(concise|detailed)$")
+    # Optional A/B for Part 3: omit → GROQ_TEMPERATURE (default 0.7)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     # Optional: prior turns from Next.js (excluding the current user message).
     # When set, replaces chat_sessions[session_id] before this turn.
     history: list[HistoryMessage] | None = None
@@ -981,6 +993,7 @@ def health():
             and "<" not in SUPABASE_DB_URL
         ),
         "groq_model": GROQ_MODEL,
+        "groq_temperature": GROQ_TEMPERATURE,
         "hf_embed_model": HF_EMBED_MODEL,
         "supabase_collection": SUPABASE_COLLECTION,
         "chat_tools": [item.name for item in CHAT_TOOLS],
@@ -1023,7 +1036,10 @@ def chat(request: ChatRequest):
     try:
         sync_session_history(request.session_id, request.history)
         reply = invoke_chat_with_agent(
-            request.session_id, message, request.reply_mode
+            request.session_id,
+            message,
+            request.reply_mode,
+            temperature=request.temperature,
         )
         remember(request.session_id, message, reply)
     except HTTPException:
@@ -1063,7 +1079,9 @@ async def chat_stream(request: Request, body: ChatRequest):
         parts: list[str] = []
         disconnected = False
         try:
-            async for text in astream_chat_with_tools(messages):
+            async for text in astream_chat_with_tools(
+                messages, temperature=body.temperature
+            ):
                 if await request.is_disconnected():
                     disconnected = True
                     break

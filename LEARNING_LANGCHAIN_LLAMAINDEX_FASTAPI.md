@@ -648,11 +648,20 @@ After the Transformer outputs logits (raw scores), they become probabilities. **
 | Temperature | Behavior | When |
 | --- | --- | --- |
 | **Low** (≈0–0.3) | Peakier probs → more deterministic / focused | Facts, codes, tool JSON |
-| **Medium** (≈0.7) | Balanced | Your chat default (`temperature=0.7` in `get_model()`) |
+| **Medium** (≈0.7) | Balanced | Default via `GROQ_TEMPERATURE` / `get_model()` |
 | **High** (≈1.0+) | Flatter probs → more creative / varied / riskier | Brainstorming |
 
 ```text
 probs = softmax(logits / temperature)
+```
+
+**Apply (done):** `POST /chat` accepts optional `temperature` (0–2). Omit → env default `0.7`.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/chat -H 'Content-Type: application/json' \
+  -d '{"message":"Write three slogans for a password fridge","temperature":0.0,"session_id":"t0"}'
+curl -s -X POST http://127.0.0.1:8000/chat -H 'Content-Type: application/json' \
+  -d '{"message":"Write three slogans for a password fridge","temperature":1.0,"session_id":"t1"}'
 ```
 
 Temperature does **not** change what the model “knows” — only how boldly it samples. RAG still matters for facts; low temp alone won’t invent a doc that wasn’t retrieved.
@@ -826,15 +835,16 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 | 2026-07-17 | Explored Google Intro to ML + tokenization, word embeddings, Transformers | Mapped to data prep / tokens / bge-small / Groq; GFG NN guide already logged |
 | 2026-07-20 | Apply: `/rag` vs `/rag-hybrid` same Q + follow-up | Hybrid exposes `retrieval_query`; both grounded BANANA-42, no invented “who set it” |
 | 2026-07-20 | Apply: `SentenceSplitter(512,64)` + `/rag/rebuild` | Env `RAG_CHUNK_SIZE`/`OVERLAP`; rebuild returns chunk knobs; fridge still retrieves |
+| 2026-07-20 | Apply: temperature A/B on `/chat` | Optional `temperature`; slogans vary at 1.0; `17*19` stayed 323 at 0 and 1 |
 
 ---
 
 ## Current focus
 
-> **Done:** Applied Parts 1–4 — compared `/rag` vs `/rag-hybrid`; wired explicit chunking + rebuild.
+> **Done:** Applied Parts 1–4 + temperature — `/rag` vs hybrid, chunking, temp A/B on `/chat`.
 
 **Next options**
 
-1. **Try temperature** — change `get_model()` temp (`0.0` vs `1.0`) and compare factual vs creative replies
-2. **Tweak chunk knobs** — try `RAG_CHUNK_SIZE=256` + rebuild; watch `sources` change on handbook questions
-3. **Phase 6** — logging, rate limits, LLM timeouts (production polish)
+1. **Tweak chunk knobs** — try `RAG_CHUNK_SIZE=256` + rebuild; watch `sources` change
+2. **Phase 6** — logging, rate limits, LLM timeouts (production polish)
+3. **Reranking / eval** — deeper RAG quality topics
