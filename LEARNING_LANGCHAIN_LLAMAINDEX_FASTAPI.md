@@ -1008,6 +1008,82 @@ Lesson: **tools ≠ document memory**. Weather tool doesn’t make the model kno
 
 ---
 
+## `/rag-hybrid` mental model (draw this from memory)
+
+Goal: one picture of the hybrid path so you can narrate it without opening the file.
+
+### Big picture
+
+```text
+                    ┌─────────────────────────────────────────┐
+  client            │              POST /rag-hybrid            │
+  question ────────►│                                         │
+  (+ history?)      │  1 MEMORY     hybrid_rag_sessions         │
+                    │  2 CONDENSE   LangChain/Groq (optional)  │
+                    │  3 RETRIEVE   LlamaIndex → pgvector      │
+                    │  4 RERANK     keyword overlap (optional) │
+                    │  5 ANSWER     LangChain/Groq + context   │
+                    │  6 REMEMBER   save Q&A turn              │
+                    └───────────────┬─────────────────────────┘
+                                    │
+                                    ▼
+              { answer, sources, retrieval_query, rerank_applied }
+```
+
+```mermaid
+flowchart LR
+  Q[User question] --> M[Load history]
+  M --> C{History empty?}
+  C -->|yes| RQ[retrieval_query = question]
+  C -->|no| CD[Condense with Groq]
+  CD --> RQ
+  RQ --> V[Vector retrieve top-k]
+  V --> R[Keyword rerank keep top-k]
+  R --> A[Answer with Groq + chunks]
+  A --> S[Save turn + JSON response]
+```
+
+### Stage → code → what you can observe
+
+| # | Stage | Function / place | Observable |
+| --- | --- | --- | --- |
+| 1 | Memory | `sync_hybrid_session_history` | Client `history` replaces server list |
+| 2 | Condense | `_condense_question` | Skipped if no history; else Groq rewrite |
+| 3 | Retrieve | `as_retriever(...).retrieve(...)` | Embedding search in Supabase |
+| 4 | Rerank | `rerank_nodes_by_keywords` | `rerank_applied: true/false` |
+| 5 | Answer | `_answer_question` | Grounded text (or “don’t know”) |
+| 6 | Remember | `remember_hybrid_turn` | Next turn can condense |
+
+Libraries: **LlamaIndex** owns step 3; **LangChain/Groq** owns 2 and 5. That’s why it’s called *hybrid*.
+
+### Contrast with `/rag`
+
+| | `/rag` | `/rag-hybrid` |
+| --- | --- | --- |
+| Who orchestrates? | LlamaIndex chat engine | You (explicit steps in `rag_hybrid.py`) |
+| See search query? | Hidden inside engine | **`retrieval_query` in JSON** |
+| Rerank? | No (your keyword pass) | Yes (optional) |
+
+### Light walkthrough (2026-07-20)
+
+Turn 1: `"What is the fridge password?"`  
+→ `retrieval_query` unchanged (no history) → retrieve → rerank → answer `BANANA-42`.
+
+Turn 2: `"Who set it?"` (same session)  
+→ condense → `retrieval_query` becomes something like **“Who set the fridge password?”**  
+→ still grounded: docs don’t name the setter → honest “don’t know”.
+
+**Self-check:** close this file and redraw the 6 boxes from memory. If you can name which library does retrieve vs answer, you’re solid.
+
+### Checklist
+
+- [x] Can narrate hybrid: memory → condense → retrieve → rerank → answer → remember
+- [x] Know LlamaIndex = retrieve; LangChain = condense + answer
+- [x] Know why `retrieval_query` exists (debug follow-ups)
+- [x] Walked a 2-turn fridge example
+
+---
+
 ## Progress log
 
 | Date | What I finished | Blockers / learnings |
@@ -1049,16 +1125,17 @@ Lesson: **tools ≠ document memory**. Weather tool doesn’t make the model kno
 | 2026-07-20 | Rerank theory + light A/B | Keyword vs cross-encoder notes; DataSync demo scores; on/off compare via `rerank_applied` |
 | 2026-07-20 | Memory & context deep-dive + light apply | Server vs client history; separate chat/rag/hybrid stores; condense needs prior turn |
 | 2026-07-20 | Agents vs chains deeper + light apply | Math (no tool) / weather (tool) / chat≠RAG; mapped create_agent vs manual loop |
+| 2026-07-20 | `/rag-hybrid` mental-model diagram + 2-turn walk | 6 stages mapped to code; follow-up condensed to “Who set the fridge password?” |
 
 ---
 
 ## Current focus
 
-> **Done:** Agents vs chains — when to use a tool loop vs plain LLM vs RAG.
+> **Done:** `/rag-hybrid` mental model — can narrate the full pipeline.
 
 **Next learning options**
 
-1. **Draw `/rag-hybrid` mental-model diagram** in your own words (condense → retrieve → rerank → answer)
-2. **Prompting patterns** — system vs few-shot vs grounded RAG prompts in this codebase
-3. **Cross-encoder (optional later)** — model-based rerank after keyword is clear
-4. **Second tool (optional)** — only if you want multi-tool agent practice
+1. **Prompting patterns** — system vs grounded RAG prompts in this codebase
+2. **Self-quiz** — close the doc and redraw hybrid + chat tool loop from memory
+3. **Cross-encoder (optional later)** — model-based rerank
+4. **Second tool (optional)** — multi-tool agent practice
