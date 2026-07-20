@@ -877,6 +877,69 @@ Both still answered DataSync DBs correctly on this easy question — rerank matt
 
 ---
 
+## Memory & context (learning deep-dive)
+
+Three different “memories” in this stack — easy to mix up:
+
+| Store | Where | Survives uvicorn reload? | Used by |
+| --- | --- | --- | --- |
+| **LLM weights** | Groq model | N/A (trained knowledge) | Always — but doesn’t know *your* fridge password |
+| **Context window** | One API call’s prompt | No — rebuilt every request | Everything the model can attend to *this turn* |
+| **Session / client history** | Server dicts + browser `localStorage` | Server: **no**; client: **yes** | Follow-ups (“what’s my name?” / “who set it?”) |
+| **Vector DB** | Supabase pgvector | **Yes** | RAG facts from `backend/data/` |
+
+### Who is source of truth?
+
+```text
+UI (localStorage)  --history-->  FastAPI sync_*  -->  chat_sessions / rag engine / hybrid_rag_sessions
+                                      ^
+                                      |  if history omitted (curl): keep whatever is already in RAM
+```
+
+With the **Next.js UI**, the browser is source of truth.  
+With **curl /docs** and no `history`, the server dict is the only memory (lost on reload).
+
+### Three separate server dicts
+
+| Dict | Endpoint family |
+| --- | --- |
+| `chat_sessions` | `/chat`, `/chat/stream` |
+| `rag_sessions` | `/rag` (cached chat engines) |
+| `hybrid_rag_sessions` | `/rag-hybrid` |
+
+**Same `session_id` does not share memory across modes.**  
+Light apply: told chat “favorite color is blue” with `session_id=shared-id`, then asked `/rag` the same id → RAG said it doesn’t know (correct — no leak from chat).
+
+### Trim = working-memory budget
+
+`remember()` / `remember_hybrid_turn()` keep **last 20 messages** (~10 turns).  
+Older turns fall out of the prompt even if the UI still shows them in the sidebar — unless the client keeps sending them via `history`.
+
+### When RAG beats chat memory (and vice versa)
+
+| Need | Prefer |
+| --- | --- |
+| Fact from uploaded / `data/` docs | **RAG** (`/rag` or `/rag-hybrid`) |
+| User’s name / preferences this chat | **Chat history** |
+| Follow-up that points at a doc (“who set **it**?”) | Both: history for condense + RAG for the fact |
+
+Light apply on `/rag-hybrid`:
+
+| Case | `retrieval_query` | Lesson |
+| --- | --- | --- |
+| Prior turn about fridge, then “Who set it?” | `Who set the fridge password?` | History → condense → better search |
+| “Who set it?” alone (fresh session) | `Who set it?` | Vague query; retrieval weaker / less targeted |
+
+### Checklist
+
+- [x] Context window ≠ long-term memory ≠ vector store
+- [x] Client `history` rehydrates after server wipe
+- [x] Chat / RAG / hybrid sessions are separate
+- [x] Condense needs history for pronoun follow-ups
+- [x] Trim (20 msgs) caps prompt size
+
+---
+
 ## Progress log
 
 | Date | What I finished | Blockers / learnings |
@@ -916,16 +979,17 @@ Both still answered DataSync DBs correctly on this easy question — rerank matt
 | 2026-07-20 | Split routers: `routers/chat.py`, `routers/rag.py` | HTTP wiring moved out of `main.py`; helpers/models stay shared |
 | 2026-07-20 | Latency profile: `rag_eval.py --profile` | 5 Q × `/rag`+`/rag-hybrid`; `/rag` ~1.5s avg, hybrid ~1.9s (+~322ms); fixed router `request` annotation 422 |
 | 2026-07-20 | Rerank theory + light A/B | Keyword vs cross-encoder notes; DataSync demo scores; on/off compare via `rerank_applied` |
+| 2026-07-20 | Memory & context deep-dive + light apply | Server vs client history; separate chat/rag/hybrid stores; condense needs prior turn |
 
 ---
 
 ## Current focus
 
-> **Done:** Rerank theory (keyword vs cross-encoder) + light on/off apply on `/rag-hybrid`.
+> **Done:** Memory & context — who remembers what (weights / context / sessions / vectors).
 
 **Next learning options**
 
-1. **Memory & context** — client `history` vs server session; when RAG beats chat memory
-2. **Agents vs chains (deeper)** — when `create_agent` helps vs hurts
-3. **Cross-encoder (optional later)** — only if you want model-based rerank after keyword is clear
-4. **Write your own mental-model diagram** of `/rag-hybrid` in the learning doc
+1. **Agents vs chains (deeper)** — when `create_agent` helps vs hurts; tool-loop failure modes
+2. **Write your own mental-model diagram** of `/rag-hybrid` (condense → retrieve → rerank → answer)
+3. **Cross-encoder (optional later)** — only after keyword rerank feels clear
+4. **Persist history (optional)** — Redis/SQLite when you want durability, not for core LLM theory
