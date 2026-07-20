@@ -47,7 +47,7 @@ Track progress by changing `[ ]` to `[x]` as you complete each item.
 - [x] Add basic error handling (`HTTPException`)
 - [x] Add request validation (message length / count limits)
 - [x] Write a health check endpoint `GET /health`
-- [ ] (Optional) Split routers: `routers/chat.py`, `routers/rag.py`
+- [x] (Optional) Split routers: `routers/chat.py`, `routers/rag.py`
 
 ### Streaming (match the Next.js chat UX)
 
@@ -840,15 +840,17 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 | 2026-07-20 | Chunk tuning: `RAG_CHUNK_SIZE=256`, overlap 64 (experiment) | `/rag` + `/rag-hybrid` still answer DataSync + BANANA-42 correctly; source snippets shifted toward smaller sections |
 | 2026-07-20 | Added `backend/rag_eval.py` for repeatable RAG checks | 3 eval cases × 2 endpoints, latency + pass/fail; `--chunk-size/--chunk-overlap` overrides |
 | 2026-07-20 | Reranking on `/rag-hybrid` | Vector top-6 → keyword overlap rerank → top-3; `rerank_applied` in response |
+| 2026-07-20 | pgvector cosine index auto-create | `_ensure_supabase_vector_index` after ingest/load; fewer query warnings |
+| 2026-07-20 | Split routers: `routers/chat.py`, `routers/rag.py` | HTTP wiring moved out of `main.py`; helpers/models stay shared |
 
 ---
 
 ## Current focus
 
-> **Done:** RAG eval runner + keyword reranking + pgvector index tuning.
+> **Done:** Router split — chat and RAG HTTP routes live under `backend/routers/`.
 
 **Next options**
 
-1. **Split routers** — `routers/chat.py`, `routers/rag.py`
-2. **Cross-encoder reranker** — upgrade from keyword overlap to model-based rerank
-3. **Latency profiling pass** — compare `/rag` vs `/rag-hybrid` with 10-query batch
+1. **Cross-encoder reranker** — upgrade from keyword overlap to model-based rerank
+2. **Latency profiling pass** — compare `/rag` vs `/rag-hybrid` with 10-query batch
+3. **Persist chat history** — Redis / SQLite (optional Phase 2)

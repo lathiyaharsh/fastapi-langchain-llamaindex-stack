@@ -155,7 +155,13 @@ Browser → Next.js BFF → this FastAPI app. API keys stay in `backend/.env` on
 
 ```text
 backend/
-  main.py           # App, chat, RAG, tools
+  main.py           # App, helpers, models, health
+  routers/
+    chat.py         # /chat, /chat/stream, clear session
+    rag.py          # /rag, rebuild, upload, clear session
+  rag_hybrid.py     # /rag-hybrid (+ keyword rerank)
+  ops.py            # logging + rate limit middleware
+  rag_eval.py       # quick RAG quality checks
   requirements.txt
   .env.example
   data/             # RAG source docs (.md / .txt)

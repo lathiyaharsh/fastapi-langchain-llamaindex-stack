@@ -39,9 +39,8 @@ from typing import Any, Sequence, cast
 import httpx
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
 from rag_hybrid import create_rag_hybrid_router, hybrid_rag_sessions
 from ops import (
@@ -1075,227 +1074,19 @@ def health():
 
 
 # =============================================================================
-# ROUTES — chat (LangChain)
+# ROUTES — chat + RAG (split into routers/ for Phase 1 optional cleanup)
 #
-# Learning split (same tools, two harnesses):
+# Chat (routers/chat.py):
 #   POST /chat        → create_agent (automatic tool loop)
 #   POST /chat/stream → manual bind_tools + astream loop (UI uses this)
 #
-# Next.js calls POST /api/chat → proxies here as POST /chat/stream.
-# FastAPI sends plain-text SSE; the Next BFF translates to JSON events.
-# =============================================================================
-SSE_HEADERS = {
-    "Cache-Control": "no-cache",
-    "Connection": "keep-alive",
-    "X-Accel-Buffering": "no",  # nginx: don't buffer SSE
-}
-
-
-@app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
-    """
-    Full reply in one JSON response via LangChain create_agent.
-
-    Compare with /chat/stream, which uses the manual tool-calling loop instead.
-    Try in Swagger /docs: POST /chat {"message": "What's the weather in London?"}
-    """
-    message = request.message.strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
-
-    try:
-        sync_session_history(request.session_id, request.history)
-        reply = invoke_chat_with_agent(
-            request.session_id,
-            message,
-            request.reply_mode,
-            temperature=request.temperature,
-        )
-        remember(request.session_id, message, reply)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _http_error_for_llm(exc, kind="LLM") from exc
-
-    return ChatResponse(reply=reply)
-
-
-@app.post("/chat/stream")
-async def chat_stream(request: Request, body: ChatRequest):
-    """
-    Stream tokens over SSE via the *manual* tool loop (not create_agent).
-
-    Wire format (one event per line):
-      data: Hello\\n\\n
-      data: [DONE]\\n\\n
-
-    Newlines inside a token are escaped as \\n so each SSE line stays intact.
-    The Next.js BFF must NOT .trim() payloads — spaces are real tokens.
-
-    If the user hits Stop, we detect disconnect and skip remember() so a
-    half-finished reply is not saved to session memory.
-    """
-    message = body.message.strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
-
-    try:
-        sync_session_history(body.session_id, body.history)
-        messages = build_messages(body.session_id, message, body.reply_mode)
-    except HTTPException:
-        raise
-
-    async def event_generator():
-        parts: list[str] = []
-        disconnected = False
-        try:
-            async for text in astream_chat_with_tools(
-                messages, temperature=body.temperature
-            ):
-                if await request.is_disconnected():
-                    disconnected = True
-                    break
-                if text:
-                    parts.append(text)
-                    # Escape newlines — SSE spec uses \\n\\n as event delimiter.
-                    safe = text.replace("\n", "\\n")
-                    yield f"data: {safe}\n\n"
-            if disconnected:
-                return
-            # Only persist full replies — not partial streams after Stop.
-            remember(body.session_id, message, "".join(parts))
-            yield "data: [DONE]\n\n"
-        except Exception as exc:
-            if _is_llm_timeout(exc):
-                yield (
-                    f"data: [ERROR] LLM request timed out after "
-                    f"{GROQ_TIMEOUT_SECONDS:.0f}s\n\n"
-                )
-            else:
-                yield "data: [ERROR] LLM request failed\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers=SSE_HEADERS,
-    )
-
-
-@app.delete("/chat/session/{session_id}")
-def clear_session(session_id: str):
-    """Clear in-memory chat history for one session."""
-    chat_sessions.pop(session_id, None)
-    return {"cleared": session_id}
-
-
-# =============================================================================
-# ROUTES — RAG (LlamaIndex + Supabase)
+# RAG (routers/rag.py):
+#   POST /rag, /rag/rebuild, /rag/upload, DELETE /rag/session/{id}
 #
-# Stateless: document vectors in Supabase (survives restart)
-# Stateful:  rag_sessions caches chat engines; turns restored via `history`
-#
-# Chat mode: CONDENSE_PLUS_CONTEXT — condense follow-ups, retrieve docs,
-# then answer using both retrieved context and chat history.
-#
-# Test flow in /docs:
-#   1. POST /rag/rebuild
-#   2. POST /rag  {"question": "What is the fridge password?", "session_id": "docs-1"}
-#   3. POST /rag  {"question": "Who set it?", "session_id": "docs-1",
-#                  "history": [{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}
+# Hybrid RAG stays in rag_hybrid.py (included above).
 # =============================================================================
-@app.post("/rag", response_model=RagResponse)
-def rag(request: RagRequest):
-    """
-    Document Q&A with chat memory (Ask My Docs).
+from routers.chat import create_chat_router
+from routers.rag import create_rag_router
 
-    Per request: condense question → retrieve top-k chunks → Groq answers.
-    sources[] is returned for API clients; the web UI may hide it.
-    """
-    question = request.question.strip()
-    if not question:
-        raise HTTPException(status_code=400, detail="Question cannot be empty.")
-
-    try:
-        # Rehydrate engine memory from client when provided (survives reload)
-        chat_engine = sync_rag_session_history(request.session_id, request.history)
-        # chat() → condense question → retrieve top-k → answer with docs + history
-        result = chat_engine.chat(question)
-        sources = _format_rag_sources(result.source_nodes)
-        return RagResponse(answer=result.response, sources=sources)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _http_error_for_llm(exc, kind="RAG") from exc
-
-
-@app.delete("/rag/session/{session_id}")
-def clear_rag_session(session_id: str):
-    """Forget RAG conversation for one session (does not delete Supabase vectors)."""
-    rag_sessions.pop(session_id, None)
-    return {"cleared": session_id}
-
-
-@app.post("/rag/rebuild")
-def rag_rebuild():
-    """
-    Re-embed everything in backend/data/ and write fresh vectors to Supabase.
-
-    Call this after editing .md files (no server restart needed).
-    View result in Supabase: schema vecs → table ai_chat_docs
-    """
-    try:
-        get_rag_index(force_rebuild=True)
-        file_count = len(list(DATA_DIR.glob("*"))) if DATA_DIR.exists() else 0
-        return {
-            "status": "rebuilt",
-            "vector_store": "supabase_pgvector",
-            "collection": SUPABASE_COLLECTION,
-            "data_dir": str(DATA_DIR),
-            "files_seen": file_count,
-            "chunk_size": RAG_CHUNK_SIZE,
-            "chunk_overlap": RAG_CHUNK_OVERLAP,
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Rebuild error: {exc}") from exc
-
-
-@app.post("/rag/upload", response_model=RagUploadResponse)
-def rag_upload(file: UploadFile = File(...)):
-    """
-    Upload a new .md or .txt file and insert only that document into RAG.
-
-    Sync (not async): LlamaIndex insertion calls sync wrappers internally that
-    conflict with FastAPI's running event loop in an async route.
-
-    Existing filenames return 409 because replacing a document must first
-    remove its old vectors. Edit it in backend/data and use /rag/rebuild.
-    """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Filename is required")
-
-    saved: Path | None = None
-    try:
-        # Initialize/load the existing index before saving, so an empty index
-        # does not ingest the new file once here and again during insert().
-        _safe_upload_filename(file.filename)
-        index = get_rag_index()
-        saved = _save_upload_to_data_dir(file)
-        _insert_uploaded_document(index, saved)
-        file_count = len(list(DATA_DIR.glob("*"))) if DATA_DIR.exists() else 0
-        return RagUploadResponse(
-            status="uploaded",
-            filename=saved.name,
-            files_seen=file_count,
-            data_dir=str(DATA_DIR),
-        )
-    except HTTPException:
-        if saved is not None:
-            saved.unlink(missing_ok=True)
-        raise
-    except Exception as exc:
-        # Do not leave a file on disk that failed to reach the vector index.
-        if saved is not None:
-            saved.unlink(missing_ok=True)
-        raise HTTPException(status_code=502, detail=f"Upload error: {exc}") from exc
+app.include_router(create_chat_router())
+app.include_router(create_rag_router())
