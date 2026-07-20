@@ -805,6 +805,78 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 
 ---
 
+## RAG retrieval Part 5 — Reranking (theory + light apply)
+
+### Why retrieve then rerank?
+
+Vector search is a **recall** step: “give me ~6 chunks that might be related.”  
+Rerank is a **precision** step: “reorder those 6 and keep the best 3 for the LLM.”
+
+```text
+question
+  → embed → pgvector top-6          (semantic neighbors)
+  → rerank                          (second scoring pass)
+  → keep top-3 → put in prompt → Groq answers
+```
+
+In this project that pipeline lives only on **`/rag-hybrid`** (`rag_hybrid.py`).  
+`/rag` uses LlamaIndex’s chat engine retrieval as-is (no keyword rerank).
+
+### Two families of rerankers
+
+| Kind | How it scores | Pros | Cons | In this stack |
+| --- | --- | --- | --- | --- |
+| **Keyword / lexical** | Count query tokens inside chunk text | Fast, no extra model, easy to debug | Misses synonyms (“DB” ≠ “PostgreSQL”) | **What you have** (`rerank_nodes_by_keywords`) |
+| **Cross-encoder** | Neural model scores *(query, chunk)* pairs together | Better relevance when wording differs | Heavier (often local model / API cost) | Future upgrade, not required for learning |
+
+Bi-encoder (your HF `bge-small`) embeds query and chunk **separately**, then compares vectors.  
+Cross-encoder reads **both** in one pass — slower but usually more accurate for the final shortlist.
+
+### Your keyword score (exact formula)
+
+```text
+tokens = alphanumeric words in query (length ≥ 2)
+score  = (# of those tokens found in chunk text) / (# of query tokens)
+```
+
+Example from today’s apply (`What does DataSync support?`):
+
+| Chunk | Keyword score | Why |
+| --- | --- | --- |
+| Mission / trustworthy AI | `0.00` | no “datasync” / “support” |
+| DataSync + PostgreSQL + MySQL | `0.50` | hits “datasync” + “support” |
+| Office hours | `0.00` | unrelated |
+
+After rerank, DataSync chunk jumps to **#1** even if vector search ranked a generic chunk higher.
+
+### Knobs
+
+| Env | Role |
+| --- | --- |
+| `RAG_RERANK_ENABLED` | on/off |
+| `RAG_RETRIEVE_TOP_K` | candidates from vectors (default 6) |
+| `RAG_RERANK_TOP_K` | chunks kept for Groq (default 3) |
+
+Response field `rerank_applied` tells you whether the reorder ran.
+
+### Light apply (done 2026-07-20)
+
+Same question on `/rag-hybrid`:
+
+- **rerank on** → `rerank_applied: true`; sources reordered (handbook / FAQ-ish chunks promoted by tokens)
+- **rerank off** → `rerank_applied: false`; raw vector order (FAQ + project-notes + handbook)
+
+Both still answered DataSync DBs correctly on this easy question — rerank matters more when vector top hits are *noisy* and you need the exact product name chunk first.
+
+**Checklist for Part 5**
+
+- [x] Retrieve = recall; rerank = precision
+- [x] Keyword vs cross-encoder trade-off
+- [x] Mapped to `rag_hybrid.rerank_nodes_by_keywords`
+- [x] A/B: `RAG_RERANK_ENABLED` true vs false on DataSync question
+
+---
+
 ## Progress log
 
 | Date | What I finished | Blockers / learnings |
@@ -843,15 +915,17 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 | 2026-07-20 | pgvector cosine index auto-create | `_ensure_supabase_vector_index` after ingest/load; fewer query warnings |
 | 2026-07-20 | Split routers: `routers/chat.py`, `routers/rag.py` | HTTP wiring moved out of `main.py`; helpers/models stay shared |
 | 2026-07-20 | Latency profile: `rag_eval.py --profile` | 5 Q × `/rag`+`/rag-hybrid`; `/rag` ~1.5s avg, hybrid ~1.9s (+~322ms); fixed router `request` annotation 422 |
+| 2026-07-20 | Rerank theory + light A/B | Keyword vs cross-encoder notes; DataSync demo scores; on/off compare via `rerank_applied` |
 
 ---
 
 ## Current focus
 
-> **Done:** Latency profiling pass — `/rag` slightly faster than `/rag-hybrid` on this batch.
+> **Done:** Rerank theory (keyword vs cross-encoder) + light on/off apply on `/rag-hybrid`.
 
-**Next options**
+**Next learning options**
 
-1. **Cross-encoder reranker** — upgrade from keyword overlap to model-based rerank
-2. **Persist chat history** — Redis / SQLite (optional Phase 2)
-3. **Add more eval cases** — handbook / edge questions in `rag_eval.py`
+1. **Memory & context** — client `history` vs server session; when RAG beats chat memory
+2. **Agents vs chains (deeper)** — when `create_agent` helps vs hurts
+3. **Cross-encoder (optional later)** — only if you want model-based rerank after keyword is clear
+4. **Write your own mental-model diagram** of `/rag-hybrid` in the learning doc
