@@ -837,16 +837,17 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 | 2026-07-20 | Apply: `SentenceSplitter(512,64)` + `/rag/rebuild` | Env `RAG_CHUNK_SIZE`/`OVERLAP`; rebuild returns chunk knobs; fridge still retrieves |
 | 2026-07-20 | Apply: temperature A/B on `/chat` | Optional `temperature`; slogans vary at 1.0; `17*19` stayed 323 at 0 and 1 |
 | 2026-07-20 | Phase 6: logging + rate limit + LLM timeout | `ops.py`; `GROQ_TIMEOUT_SECONDS`; `RATE_LIMIT_PER_MINUTE`; 429/504 |
+| 2026-07-20 | Chunk tuning: `RAG_CHUNK_SIZE=256`, overlap 64 (experiment) | `/rag` + `/rag-hybrid` still answer DataSync + BANANA-42 correctly; source snippets shifted toward smaller sections |
+| 2026-07-20 | Added `backend/rag_eval.py` for repeatable RAG checks | 3 eval cases × 2 endpoints, latency + pass/fail; `--chunk-size/--chunk-overlap` overrides |
 
 ---
 
 ## Current focus
 
-> **Done:** Phase 6 core — structured logs, rate limits, Groq timeouts (Docker still optional).
+> **Done:** Phase 6 core + chunk tuning + repeatable RAG eval runner.
 
 **Next options**
 
-1. **Dockerize** FastAPI (optional Phase 6)
-2. **Tweak chunk knobs** — `RAG_CHUNK_SIZE=256` + rebuild
-3. **Reranking / RAG eval** — deeper quality topics
-4. **Split routers** — `routers/chat.py`, `routers/rag.py`
+1. **Reranking** — improve retrieval ordering after top-k
+2. **Split routers** — `routers/chat.py`, `routers/rag.py`
+3. **Add pgvector index tuning** — reduce retrieval latency/warnings

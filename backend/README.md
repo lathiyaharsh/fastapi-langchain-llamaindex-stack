@@ -164,6 +164,20 @@ backend/
 .venv/bin/python -m unittest tests.test_main -v
 ```
 
+## RAG eval (quick quality check)
+
+Run fixed question checks on `/rag` and `/rag-hybrid` with pass/fail + latency:
+
+```bash
+.venv/bin/python rag_eval.py --rebuild
+```
+
+Try chunking A/B in one command:
+
+```bash
+.venv/bin/python rag_eval.py --rebuild --chunk-size 256 --chunk-overlap 64
+```
+
 ## Troubleshooting
 
 | Problem | Fix |
