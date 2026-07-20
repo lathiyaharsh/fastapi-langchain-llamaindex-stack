@@ -189,6 +189,13 @@ Try chunking A/B in one command:
 .venv/bin/python rag_eval.py --rebuild --chunk-size 256 --chunk-overlap 64
 ```
 
+Latency profile (5 questions × both endpoints = 10 timed calls + warm-up):
+
+```bash
+.venv/bin/python rag_eval.py --profile
+```
+
+Looks at `by_endpoint` (`avg_ms`, `p50_ms`, `p95_ms`) and `comparison.faster_avg`.
 ## Troubleshooting
 
 | Problem | Fix |

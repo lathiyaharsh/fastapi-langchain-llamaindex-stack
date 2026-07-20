@@ -9,9 +9,10 @@ Endpoints:
 
 Hybrid RAG lives in rag_hybrid.py (separate learning module).
 Helpers and Pydantic models stay in main.py; this module owns HTTP wiring.
-"""
 
-from __future__ import annotations
+Note: no `from __future__ import annotations` here — FastAPI must resolve
+`main.RagRequest` at function-definition time inside create_rag_router().
+"""
 
 from pathlib import Path
 
@@ -30,21 +31,21 @@ def create_rag_router() -> APIRouter:
     router = APIRouter(tags=["rag"])
 
     @router.post("/rag", response_model=main.RagResponse)
-    def rag(request: main.RagRequest):
+    def rag(body: main.RagRequest):
         """
         Document Q&A with chat memory (Ask My Docs).
 
         Per request: condense question → retrieve top-k chunks → Groq answers.
         sources[] is returned for API clients; the web UI may hide it.
         """
-        question = request.question.strip()
+        question = body.question.strip()
         if not question:
             raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
         try:
             # Rehydrate engine memory from client when provided (survives reload)
             chat_engine = main.sync_rag_session_history(
-                request.session_id, request.history
+                body.session_id, body.history
             )
             # chat() → condense question → retrieve top-k → answer with docs + history
             result = chat_engine.chat(question)

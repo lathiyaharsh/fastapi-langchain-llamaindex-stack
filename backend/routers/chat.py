@@ -6,9 +6,10 @@ Learning split:
   POST /chat/stream → manual bind_tools + astream loop (UI uses this)
 
 Helpers and Pydantic models stay in main.py; this module only owns HTTP wiring.
-"""
 
-from __future__ import annotations
+Note: no `from __future__ import annotations` here — FastAPI must resolve
+`main.ChatRequest` at function-definition time inside create_chat_router().
+"""
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -33,26 +34,26 @@ def create_chat_router() -> APIRouter:
     router = APIRouter(tags=["chat"])
 
     @router.post("/chat", response_model=main.ChatResponse)
-    def chat(request: main.ChatRequest):
+    def chat(body: main.ChatRequest):
         """
         Full reply in one JSON response via LangChain create_agent.
 
         Compare with /chat/stream, which uses the manual tool-calling loop instead.
         Try in Swagger /docs: POST /chat {"message": "What's the weather in London?"}
         """
-        message = request.message.strip()
+        message = body.message.strip()
         if not message:
             raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
         try:
-            main.sync_session_history(request.session_id, request.history)
+            main.sync_session_history(body.session_id, body.history)
             reply = main.invoke_chat_with_agent(
-                request.session_id,
+                body.session_id,
                 message,
-                request.reply_mode,
-                temperature=request.temperature,
+                body.reply_mode,
+                temperature=body.temperature,
             )
-            main.remember(request.session_id, message, reply)
+            main.remember(body.session_id, message, reply)
         except HTTPException:
             raise
         except Exception as exc:

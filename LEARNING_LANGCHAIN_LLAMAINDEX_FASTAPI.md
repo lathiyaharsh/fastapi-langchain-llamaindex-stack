@@ -842,15 +842,16 @@ Next-token (Part 3)  →  how the answer is sampled into your UI / JSON
 | 2026-07-20 | Reranking on `/rag-hybrid` | Vector top-6 → keyword overlap rerank → top-3; `rerank_applied` in response |
 | 2026-07-20 | pgvector cosine index auto-create | `_ensure_supabase_vector_index` after ingest/load; fewer query warnings |
 | 2026-07-20 | Split routers: `routers/chat.py`, `routers/rag.py` | HTTP wiring moved out of `main.py`; helpers/models stay shared |
+| 2026-07-20 | Latency profile: `rag_eval.py --profile` | 5 Q × `/rag`+`/rag-hybrid`; `/rag` ~1.5s avg, hybrid ~1.9s (+~322ms); fixed router `request` annotation 422 |
 
 ---
 
 ## Current focus
 
-> **Done:** Router split — chat and RAG HTTP routes live under `backend/routers/`.
+> **Done:** Latency profiling pass — `/rag` slightly faster than `/rag-hybrid` on this batch.
 
 **Next options**
 
 1. **Cross-encoder reranker** — upgrade from keyword overlap to model-based rerank
-2. **Latency profiling pass** — compare `/rag` vs `/rag-hybrid` with 10-query batch
-3. **Persist chat history** — Redis / SQLite (optional Phase 2)
+2. **Persist chat history** — Redis / SQLite (optional Phase 2)
+3. **Add more eval cases** — handbook / edge questions in `rag_eval.py`
