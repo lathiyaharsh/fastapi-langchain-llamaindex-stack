@@ -1084,6 +1084,71 @@ Turn 2: `"Who set it?"` (same session)
 
 ---
 
+## Prompting patterns (in this codebase)
+
+Prompts are not magic — they are **instructions in the context window**. This project uses four prompt “jobs”:
+
+| Job | Where | Pattern |
+| --- | --- | --- |
+| Chat behavior | `chat_system_prompt()` | **System** — role + tool nudge + style |
+| Doc Q&A rules | `RAG_CONTEXT_PROMPT` | **Template** — `{context_str}` + don’t invent |
+| Rewrite follow-ups | `_CONDENSE_PROMPT` | **Narrow task** — return only a search query |
+| Hybrid answer | `_ANSWER_PROMPT` | **Grounded** — `{context}` or say you don’t know |
+
+### 1. System prompt (chat)
+
+```text
+"You are a helpful assistant with a weather tool.
+ Use get_weather for current conditions instead of guessing.
+ {Keep short… | Give thorough…}"
+```
+
+- Stable across turns (who you are)
+- `reply_mode` only changes the **style** line
+- Tool nudge ≠ guaranteeing a tool call — model still decides
+
+### 2. Template with slots (RAG `/rag`)
+
+`RAG_CONTEXT_PROMPT` mixes:
+
+- durable rules (“don’t invent”, “use history for name”, “don’t know if missing”)
+- turn-specific `{context_str}` filled by LlamaIndex
+
+### 3. Single-purpose prompts (hybrid)
+
+| Prompt | Allowed output |
+| --- | --- |
+| Condense | **Only** rewritten query text |
+| Answer | Natural language grounded in `{context}` |
+
+Separating them avoids “answer the user” leaking into the retrieval rewrite.
+
+### 4. Patterns you’ll hear elsewhere
+
+| Pattern | Meaning | Here? |
+| --- | --- | --- |
+| System | Standing rules | Chat yes |
+| User / human | This turn’s question | Everywhere |
+| Few-shot | Example Q→A in the prompt | Not used (keep simple) |
+| Grounded / RAG | “Answer from context only” | `/rag` + `/rag-hybrid` |
+| Chain-of-thought | “Think step by step” | Not used |
+
+### Light apply (2026-07-20)
+
+| Experiment | Result |
+| --- | --- |
+| Same question, `reply_mode=concise` vs `detailed` | ~259 chars vs ~2122 chars — **style prompt works** |
+| `/rag-hybrid`: “CEO’s middle name?” | “I do not know…” — **grounded don’t-know works** |
+
+### Checklist
+
+- [x] System vs template vs grounded vs condense jobs mapped to files
+- [x] Style knob = `reply_mode` in system prompt
+- [x] RAG “don’t invent” is a prompt rule + retrieval, not magic
+- [x] Light apply: concise/detailed + unknown fact
+
+---
+
 ## Progress log
 
 | Date | What I finished | Blockers / learnings |
@@ -1126,16 +1191,17 @@ Turn 2: `"Who set it?"` (same session)
 | 2026-07-20 | Memory & context deep-dive + light apply | Server vs client history; separate chat/rag/hybrid stores; condense needs prior turn |
 | 2026-07-20 | Agents vs chains deeper + light apply | Math (no tool) / weather (tool) / chat≠RAG; mapped create_agent vs manual loop |
 | 2026-07-20 | `/rag-hybrid` mental-model diagram + 2-turn walk | 6 stages mapped to code; follow-up condensed to “Who set the fridge password?” |
+| 2026-07-20 | Prompting patterns + light apply | Mapped 4 prompt jobs; concise≪detailed; RAG don’t-know on unknown CEO name |
 
 ---
 
 ## Current focus
 
-> **Done:** `/rag-hybrid` mental model — can narrate the full pipeline.
+> **Done:** Prompting patterns — system / template / condense / grounded in this stack.
 
 **Next learning options**
 
-1. **Prompting patterns** — system vs grounded RAG prompts in this codebase
-2. **Self-quiz** — close the doc and redraw hybrid + chat tool loop from memory
-3. **Cross-encoder (optional later)** — model-based rerank
-4. **Second tool (optional)** — multi-tool agent practice
+1. **Self-quiz** — redraw hybrid pipeline + name the 4 prompts from memory
+2. **Eval mindset** — when `rag_eval.py` pass/fail is enough vs human review
+3. **Cross-encoder (optional later)**
+4. **Second tool (optional)** — multi-tool practice
