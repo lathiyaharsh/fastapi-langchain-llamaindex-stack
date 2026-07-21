@@ -196,6 +196,53 @@ Latency profile (5 questions × both endpoints = 10 timed calls + warm-up):
 ```
 
 Looks at `by_endpoint` (`avg_ms`, `p50_ms`, `p95_ms`) and `comparison.faster_avg`.
+
+## Deploy to the cloud (live backend)
+
+Easiest path for learning: **[Render](https://render.com)** (free web service) or **[Railway](https://railway.app)**. No Docker required.
+
+### Render (recommended)
+
+1. Push this repo to GitHub (do **not** commit `backend/.env`).
+2. [Render Dashboard](https://dashboard.render.com) → **New** → **Web Service** → connect the repo.
+3. Settings:
+   - **Root Directory:** `backend`
+   - **Runtime:** Python 3
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
+4. **Environment** (same as local `.env`):
+   - `GROQ_API_KEY`
+   - `HUGGINGFACE_API_KEY` (for Ask My Docs)
+   - `SUPABASE_DB_URL` (for Ask My Docs)
+   - Optional: `GROQ_MODEL`, `ALLOWED_ORIGINS` (your Vercel/frontend URL)
+5. Deploy → open `https://YOUR-SERVICE.onrender.com/health` — expect `{"status":"ok",...}`.
+6. Point the Next.js UI at it: in `web/.env.local` (or Vercel env):
+
+```bash
+FASTAPI_URL=https://YOUR-SERVICE.onrender.com
+```
+
+Then restart `npm run dev` (or redeploy the frontend).
+
+Free Render services sleep after idle; first request can take ~30–60s.
+
+### Railway
+
+1. New project → Deploy from GitHub → set root to `backend`.
+2. Add the same env vars.
+3. Start command (or use `Procfile`): `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+4. Copy the public URL into `FASTAPI_URL` as above.
+
+### CORS
+
+If the browser calls FastAPI directly (not only via Next.js proxy), set:
+
+```bash
+ALLOWED_ORIGINS=https://your-frontend.vercel.app
+```
+
+Next.js server routes use `FASTAPI_URL` server-side, so CORS is often not needed for the UI proxy path.
+
 ## Troubleshooting
 
 | Problem | Fix |
