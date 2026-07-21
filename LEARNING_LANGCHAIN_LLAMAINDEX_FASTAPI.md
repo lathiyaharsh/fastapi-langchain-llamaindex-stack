@@ -1149,6 +1149,65 @@ Separating them avoids “answer the user” leaking into the retrieval rewrite.
 
 ---
 
+## FastAPI fundamentals lab (2026-07-21)
+
+Separate from RAG. Lives in **`backend/labs/fastapi_lab.py`** (mini app) + **`backend/tests/test_lab.py`** (tests). The real backend in `main.py` is untouched.
+
+Run the lab app (port 8001, real app keeps 8000):
+
+```bash
+cd backend
+.venv/bin/uvicorn labs.fastapi_lab:app --reload --port 8001
+# open http://127.0.0.1:8001/docs
+```
+
+Run its tests:
+
+```bash
+.venv/bin/python -m unittest tests.test_lab -v
+```
+
+### Python for JS devs — 60-second primer
+
+| Python | JS/TS equivalent |
+| --- | --- |
+| `def f(x: int = 0):` | `function f(x = 0)` — types are checked by FastAPI at runtime |
+| `async def` / `await` | same as JS |
+| `{"a": 1}` dict | object literal `{a: 1}` |
+| `[x for x in items]` | `items.map(x => x)` |
+| `**page` | spread `{...page}` |
+| `raise HTTPException(...)` | `throw` |
+| `@app.get("/x")` decorator | wrapping a function, like `router.get("/x", handler)` |
+| `lambda: {...}` | `() => ({...})` |
+| indentation | replaces `{ }` — it's syntax, not style |
+| `None` / `is None` | `null` / `=== null` |
+
+### The five topics
+
+**1. `Depends` — dependency injection.** A dependency is just a function; FastAPI calls it and injects its **return value** into the endpoint. Its params become query params (validated + documented for free). Like NestJS providers. Killer feature: `app.dependency_overrides[real_dep] = fake_dep` in tests — swap out DBs/auth without mocking HTTP.
+
+**2. Bearer/JWT security.** `POST /auth/login` checks credentials and returns a signed JWT (`jwt.encode`, same as Node's `jsonwebtoken`). `HTTPBearer` pulls `Authorization: Bearer <token>` from the header; a `get_current_user` dependency verifies signature + expiry and returns the user. Protect any route by adding `Depends(get_current_user)`. Missing header → 401; bad/expired token → 401.
+
+**3. Lifespan.** One `@asynccontextmanager` function: code before `yield` = startup (open DB pools, load models), after `yield` = shutdown (cleanup). Your real app could use this instead of building the RAG index lazily on first request.
+
+**4. `BackgroundTasks`.** `background_tasks.add_task(fn, args)` — response is sent first, task runs after. Like `setImmediate` after `res.json()`. For emails/logs, not heavy jobs (those want Celery, the Python BullMQ).
+
+**5. `TestClient`.** In-memory HTTP calls, no server — Python's supertest. Patterns practiced in `test_lab.py`: status/JSON asserts, 422 validation checks, `dependency_overrides` (incl. skipping auth), multi-step login flow, monkeypatching `time.sleep`, and `with TestClient(app)` to trigger lifespan.
+
+### Gotcha found while writing tests
+
+Expected 403 for a missing Authorization header (old FastAPI behavior) — current version returns **401**, which is more correct HTTP anyway (401 = who are you, 403 = you're known but not allowed).
+
+### Checklist
+
+- [x] Depends: pagination dep + override in tests
+- [x] JWT: login → token → protected `/auth/me`
+- [x] Lifespan: startup state + `with TestClient` pattern
+- [x] BackgroundTasks: 202 now, log written after
+- [x] TestClient: 11 tests green
+
+---
+
 ## Progress log
 
 | Date | What I finished | Blockers / learnings |
@@ -1192,16 +1251,18 @@ Separating them avoids “answer the user” leaking into the retrieval rewrite.
 | 2026-07-20 | Agents vs chains deeper + light apply | Math (no tool) / weather (tool) / chat≠RAG; mapped create_agent vs manual loop |
 | 2026-07-20 | `/rag-hybrid` mental-model diagram + 2-turn walk | 6 stages mapped to code; follow-up condensed to “Who set the fridge password?” |
 | 2026-07-20 | Prompting patterns + light apply | Mapped 4 prompt jobs; concise≪detailed; RAG don’t-know on unknown CEO name |
+| 2026-07-21 | Backend live on FastAPI Cloud | `fastapi[standard]` + `.python-version`; routes have no `/api` prefix; `ALLOWED_ORIGINS` env for CORS |
+| 2026-07-21 | FastAPI fundamentals lab: Depends, JWT, lifespan, BackgroundTasks, TestClient | `labs/fastapi_lab.py` + `tests/test_lab.py` (11 green); HTTPBearer missing header = 401 in current FastAPI |
 
 ---
 
 ## Current focus
 
-> **Done:** Prompting patterns — system / template / condense / grounded in this stack.
+> **Done:** FastAPI fundamentals lab — Depends, Bearer/JWT, lifespan, BackgroundTasks, TestClient (`backend/labs/fastapi_lab.py`).
 
 **Next learning options**
 
-1. **Self-quiz** — redraw hybrid pipeline + name the 4 prompts from memory
-2. **Eval mindset** — when `rag_eval.py` pass/fail is enough vs human review
-3. **Cross-encoder (optional later)**
-4. **Second tool (optional)** — multi-tool practice
+1. **Hands-on with the lab** — run it on :8001, walk `/docs` in order: `/items` → `/auth/login` → `/auth/me` → `/notify` → `/notify/log`
+2. **Apply to real app** — protect `/rag/rebuild` with `get_current_user`, or move index build into lifespan
+3. **Self-quiz** — redraw hybrid pipeline + name the 4 prompts from memory
+4. **Eval mindset** — when `rag_eval.py` pass/fail is enough vs human review
