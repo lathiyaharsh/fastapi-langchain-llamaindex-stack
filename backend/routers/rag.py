@@ -16,7 +16,9 @@ Note: no `from __future__ import annotations` here — FastAPI must resolve
 
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+
+from auth import get_current_user
 
 
 def create_rag_router() -> APIRouter:
@@ -63,10 +65,11 @@ def create_rag_router() -> APIRouter:
         return {"cleared": session_id}
 
     @router.post("/rag/rebuild")
-    def rag_rebuild():
+    def rag_rebuild(user: dict = Depends(get_current_user)):
         """
         Re-embed everything in backend/data/ and write fresh vectors to Supabase.
 
+        Protected: requires Authorization Bearer JWT from POST /auth/login.
         Call this after editing .md files (no server restart needed).
         View result in Supabase: schema vecs → table ai_chat_docs
         """
@@ -83,6 +86,7 @@ def create_rag_router() -> APIRouter:
                 "files_seen": file_count,
                 "chunk_size": main.RAG_CHUNK_SIZE,
                 "chunk_overlap": main.RAG_CHUNK_OVERLAP,
+                "rebuilt_by": user["username"],
             }
         except HTTPException:
             raise

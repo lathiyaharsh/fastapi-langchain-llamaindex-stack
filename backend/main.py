@@ -28,11 +28,13 @@ Run (from backend/, with venv active):
   Docs: http://127.0.0.1:8000/docs
 """
 
+import logging
 import os
 import re
 import time
 import warnings
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Sequence, cast
 
@@ -48,6 +50,8 @@ from ops import (
     RequestLoggingMiddleware,
     configure_logging,
 )
+
+logger = logging.getLogger(__name__)
 
 # --- LangChain: orchestrates chat, prompts, memory, tools ---
 from langchain_groq import ChatGroq
@@ -96,6 +100,12 @@ GROQ_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.7"))
 GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "60"))
 # Phase 6: per-IP sliding window on /chat* and /rag* (0 = disable)
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+# Lifespan: warm RAG index at startup (false keeps unit tests / chat-only boots fast)
+WARM_RAG_ON_STARTUP = os.getenv("WARM_RAG_ON_STARTUP", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 HF_EMBED_MODEL = os.getenv("HF_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
@@ -968,7 +978,29 @@ def _http_error_for_llm(exc: BaseException, *, kind: str = "LLM") -> HTTPExcepti
 # FASTAPI APP
 # =============================================================================
 configure_logging()
-app = FastAPI(title="AI Chat Learning Backend")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Startup/shutdown hook (lab topic applied to the real app).
+
+    Before yield = startup: optionally warm the RAG index so the first
+    /rag request is not the one that pays HF + Supabase load cost.
+    After yield = shutdown (nothing to tear down yet — connections are lazy).
+    """
+    app.state.started_at = time.time()
+    if WARM_RAG_ON_STARTUP:
+        try:
+            get_rag_index()
+            logger.info("RAG index warmed at startup")
+        except Exception as exc:
+            # Chat still works without RAG; don't crash the whole process.
+            logger.warning("RAG warmup skipped: %s", exc)
+    yield
+
+
+app = FastAPI(title="AI Chat Learning Backend", lifespan=lifespan)
 app.include_router(
     create_rag_hybrid_router(
         get_rag_index=lambda: get_rag_index(),
@@ -1076,8 +1108,13 @@ def health():
         "chat_stream": "manual_bind_tools_loop",
         "rag_default": "llamaindex_chat_engine",
         "rag_hybrid": "llamaindex_retriever_plus_langchain_answer",
+        "warm_rag_on_startup": WARM_RAG_ON_STARTUP,
+        "auth_login": "POST /auth/login → Bearer JWT for /rag/rebuild",
     }
 
+@app.get("/items/{item_id}")
+async def read_item(item_id: int):
+    return {"item_id": item_id}
 
 # =============================================================================
 # ROUTES — chat + RAG (split into routers/ for Phase 1 optional cleanup)
@@ -1091,8 +1128,10 @@ def health():
 #
 # Hybrid RAG stays in rag_hybrid.py (included above).
 # =============================================================================
+from routers.auth import create_auth_router
 from routers.chat import create_chat_router
 from routers.rag import create_rag_router
 
+app.include_router(create_auth_router())
 app.include_router(create_chat_router())
 app.include_router(create_rag_router())

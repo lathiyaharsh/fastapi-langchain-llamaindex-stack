@@ -25,6 +25,23 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 
+def _auth_headers(client: TestClient) -> dict[str, str]:
+    """Login with AUTH_USERNAME/PASSWORD and return Authorization header."""
+    import auth as auth_mod
+
+    response = client.post(
+        "/auth/login",
+        json={
+            "username": auth_mod.AUTH_USERNAME,
+            "password": auth_mod.AUTH_PASSWORD,
+        },
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"auth login failed: {response.status_code} {response.text}")
+    token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 @dataclass(frozen=True)
 class EvalCase:
     name: str
@@ -130,7 +147,7 @@ def run_eval(*, rebuild: bool, chunk_size: int | None, chunk_overlap: int | None
     }
 
     if rebuild:
-        rebuild_resp = client.post("/rag/rebuild")
+        rebuild_resp = client.post("/rag/rebuild", headers=_auth_headers(client))
         report["rebuild"] = rebuild_resp.json()
 
     endpoints = ("/rag", "/rag-hybrid")
@@ -197,7 +214,7 @@ def run_profile(*, rebuild: bool, chunk_size: int | None, chunk_overlap: int | N
     }
 
     if rebuild:
-        rebuild_resp = client.post("/rag/rebuild")
+        rebuild_resp = client.post("/rag/rebuild", headers=_auth_headers(client))
         report["rebuild"] = rebuild_resp.json()
 
     # Warm-up (exclude from stats) — first request can pay index/embed setup cost.

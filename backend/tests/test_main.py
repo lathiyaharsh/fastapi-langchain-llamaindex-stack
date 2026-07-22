@@ -345,6 +345,41 @@ class MainRoutesTest(unittest.TestCase):
         finally:
             uploaded.unlink(missing_ok=True)
 
+    def test_rebuild_requires_auth(self) -> None:
+        response = self.client.post("/rag/rebuild")
+        self.assertEqual(response.status_code, 401)
+
+    def test_rebuild_with_jwt(self) -> None:
+        login = self.client.post(
+            "/auth/login",
+            json={"username": "alice", "password": "wonderland"},
+        )
+        self.assertEqual(login.status_code, 200)
+        token = login.json()["access_token"]
+
+        with patch.object(main, "get_rag_index", return_value=object()) as get_index:
+            response = self.client.post(
+                "/rag/rebuild",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "rebuilt")
+        self.assertEqual(response.json()["rebuilt_by"], "alice")
+        get_index.assert_called_once_with(force_rebuild=True)
+
+    def test_auth_me_with_token(self) -> None:
+        token = self.client.post(
+            "/auth/login",
+            json={"username": "alice", "password": "wonderland"},
+        ).json()["access_token"]
+        response = self.client.get(
+            "/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["username"], "alice")
+
     def test_rerank_promotes_keyword_match(self) -> None:
         from llama_index.core.schema import NodeWithScore, TextNode
 

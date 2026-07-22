@@ -42,6 +42,10 @@ Edit `.env` and set at least `GROQ_API_KEY`. For Ask My Docs, also set `HUGGINGF
 | `GROQ_TEMPERATURE` | `0.7` | Default sampling temp; override per `/chat` request |
 | `GROQ_TIMEOUT_SECONDS` | `60` | Groq HTTP timeout → HTTP 504 on hang |
 | `RATE_LIMIT_PER_MINUTE` | `60` | Per-IP limit on `/chat*` + `/rag*` (`0` disables) |
+| `JWT_SECRET` | `learning-only-change-me` | Signs Bearer tokens for `/rag/rebuild` |
+| `AUTH_USERNAME` / `AUTH_PASSWORD` | `alice` / `wonderland` | Login for `POST /auth/login` |
+| `JWT_TTL_MINUTES` | `30` | Token lifetime |
+| `WARM_RAG_ON_STARTUP` | `true` | Lifespan loads RAG index at boot (`false` = faster local start) |
 | `HUGGINGFACE_API_KEY` | — | Cloud embeddings (no local torch) |
 | `HF_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model |
 | `HF_EMBED_DIM` | `384` | Must match Supabase collection dim |
@@ -82,11 +86,13 @@ uvicorn main:app --reload --host 127.0.0.1 --port 8000
 | `POST` | `/chat` | Full JSON chat reply |
 | `POST` | `/chat/stream` | SSE token stream (used by the web UI) |
 | `DELETE` | `/chat/session/{id}` | Clear in-memory chat history |
+| `POST` | `/auth/login` | Username/password → JWT (`Bearer` token) |
+| `GET` | `/auth/me` | Who am I? (requires Bearer token) |
 | `POST` | `/rag` | Document Q&A |
 | `POST` | `/rag-hybrid` | LlamaIndex retrieve + LangChain/Groq answer |
 | `DELETE` | `/rag-hybrid/session/{id}` | Clear hybrid RAG chat history |
 | `POST` | `/rag/upload` | Upload `.md` / `.txt` (incremental insert) |
-| `POST` | `/rag/rebuild` | Re-embed everything in `data/` |
+| `POST` | `/rag/rebuild` | Re-embed everything in `data/` (**JWT required**) |
 | `DELETE` | `/rag/session/{id}` | Clear RAG conversation (keeps vectors) |
 
 ### Chat notes
@@ -131,11 +137,16 @@ create extension if not exists vector;
 
 ```bash
 curl -s http://127.0.0.1:8000/health   # supabase_configured should be true
-curl -s -X POST http://127.0.0.1:8000/rag/rebuild
+TOKEN=$(curl -s -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"wonderland"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+curl -s -X POST http://127.0.0.1:8000/rag/rebuild -H "Authorization: Bearer $TOKEN"
 curl -s -X POST http://127.0.0.1:8000/rag \
   -H "Content-Type: application/json" \
   -d '{"question":"What is the fridge password?"}'
 ```
+
+`/rag/rebuild` requires a JWT from `/auth/login` (defaults: `alice` / `wonderland`). Chat, `/rag`, and `/rag/upload` stay open for the learning UI.
 
 ## Next.js integration (`web/`)
 

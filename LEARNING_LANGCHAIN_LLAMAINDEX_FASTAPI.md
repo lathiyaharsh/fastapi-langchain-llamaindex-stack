@@ -1206,6 +1206,33 @@ Expected 403 for a missing Authorization header (old FastAPI behavior) — curre
 - [x] BackgroundTasks: 202 now, log written after
 - [x] TestClient: 11 tests green
 
+### Apply to real backend (2026-07-22)
+
+Moved lab ideas into the production learning app (not only `labs/`):
+
+| Lab topic | Real app |
+| --- | --- |
+| `Depends` + Bearer JWT | `auth.py` + `routers/auth.py`; `POST /rag/rebuild` requires `Depends(get_current_user)` |
+| Lifespan | `main.py` `lifespan=` warms RAG index when `WARM_RAG_ON_STARTUP=true` (best-effort; failures logged, chat still boots) |
+| TestClient | New tests: rebuild 401 without token, 200 with JWT + mocked index |
+
+Still open for the UI (no token): `/chat*`, `/rag`, `/rag/upload`. Only the destructive rebuild is locked.
+
+Try it:
+
+```bash
+# login
+curl -s -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"wonderland"}'
+
+# paste token into /docs Authorize, or:
+curl -s -X POST http://127.0.0.1:8000/rag/rebuild \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+Env: `JWT_SECRET`, `AUTH_USERNAME`, `AUTH_PASSWORD`, `WARM_RAG_ON_STARTUP` (see `.env.example`). Set the same on FastAPI Cloud before redeploying.
+
 ---
 
 ## Progress log
@@ -1253,16 +1280,17 @@ Expected 403 for a missing Authorization header (old FastAPI behavior) — curre
 | 2026-07-20 | Prompting patterns + light apply | Mapped 4 prompt jobs; concise≪detailed; RAG don’t-know on unknown CEO name |
 | 2026-07-21 | Backend live on FastAPI Cloud | `fastapi[standard]` + `.python-version`; routes have no `/api` prefix; `ALLOWED_ORIGINS` env for CORS |
 | 2026-07-21 | FastAPI fundamentals lab: Depends, JWT, lifespan, BackgroundTasks, TestClient | `labs/fastapi_lab.py` + `tests/test_lab.py` (11 green); HTTPBearer missing header = 401 in current FastAPI |
+| 2026-07-22 | Apply lab → real app: JWT on `/rag/rebuild` + lifespan RAG warmup | `auth.py`, `routers/auth.py`; `/rag/upload` stays open for UI; `rag_eval` logs in before rebuild |
 
 ---
 
 ## Current focus
 
-> **Done:** FastAPI fundamentals lab — Depends, Bearer/JWT, lifespan, BackgroundTasks, TestClient (`backend/labs/fastapi_lab.py`).
+> **Done:** Applied FastAPI lab to real backend — JWT protects `/rag/rebuild`; lifespan can warm RAG at startup.
 
 **Next learning options**
 
-1. **Hands-on with the lab** — run it on :8001, walk `/docs` in order: `/items` → `/auth/login` → `/auth/me` → `/notify` → `/notify/log`
-2. **Apply to real app** — protect `/rag/rebuild` with `get_current_user`, or move index build into lifespan
-3. **Self-quiz** — redraw hybrid pipeline + name the 4 prompts from memory
-4. **Eval mindset** — when `rag_eval.py` pass/fail is enough vs human review
+1. **Redeploy** — set `JWT_SECRET` / `AUTH_*` / `WARM_RAG_ON_STARTUP` on FastAPI Cloud and redeploy
+2. **Continue tutorial** — handling errors, bigger apps/routers, SQL databases
+3. **Optional** — protect `/rag/upload` too (would need a token path in the Next.js UI)
+4. **Self-quiz** — redraw hybrid pipeline + name the 4 prompts from memory
