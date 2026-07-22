@@ -1235,6 +1235,53 @@ Env: `JWT_SECRET`, `AUTH_USERNAME`, `AUTH_PASSWORD`, `WARM_RAG_ON_STARTUP` (see 
 
 ---
 
+## FastAPI lab Part 2 — errors & routers (2026-07-22)
+
+Tutorial pages:
+- [Handling Errors](https://fastapi.tiangolo.com/tutorial/handling-errors/)
+- [Bigger Applications](https://fastapi.tiangolo.com/tutorial/bigger-applications/)
+
+Code: `backend/labs/fastapi_lab_part2.py` · tests: `tests/test_lab_part2.py`
+
+```bash
+cd backend
+.venv/bin/uvicorn labs.fastapi_lab_part2:app --reload --port 8002
+# http://127.0.0.1:8002/docs
+
+.venv/bin/python -m unittest tests.test_lab_part2 -v
+```
+
+### Handling errors
+
+| Pattern | What it does | [JS] cousin |
+| --- | --- | --- |
+| `raise HTTPException(404, detail=...)` | Abort request → JSON `{"detail": ...}` | Nest `HttpException` / Express `res.status(404).json` |
+| Custom `Exception` + `@app.exception_handler` | Domain error → your JSON shape/status | Express error middleware |
+| Override `RequestValidationError` | Custom 422 (lab echoes bad `body`) | Zod/parse middleware that formats errors |
+
+In the **real** app you already `raise HTTPException` in chat/RAG/auth. `_http_error_for_llm` in `main.py` is the “library blew up → pick 502/504” helper — same idea as a custom handler, but called with `raise ... from exc` inside routes.
+
+### Bigger applications (routers)
+
+| Lab | Real backend |
+| --- | --- |
+| `shop_router = APIRouter(prefix="/shop", tags=["shop"])` | `create_chat_router()` / `create_rag_router()` / `create_auth_router()` |
+| `app.include_router(shop_router)` | `main.py` bottom: `app.include_router(...)` |
+| `dependencies=[Depends(...)]` on router | JWT on `/rag/rebuild` is route-level; lab shows **router-wide** Depends on `/admin/*` |
+
+`prefix` = Express `app.use("/shop", router)`. `tags` = Swagger grouping only.
+
+### Hands-on checklist
+
+- [ ] 200 for `/shop/products/widget`
+- [ ] 404 + `X-Error` header for missing product
+- [ ] 418 JSON from `StockError` on `/shop/boom`
+- [ ] 422 with `body` echoed for bad `POST /shop/orders`
+- [ ] `/admin/secret` 401 without `X-Lab-Token: lab-secret`, 200 with it
+- [ ] Open `routers/chat.py` and spot the same `APIRouter` + `tags` pattern
+
+---
+
 ## Progress log
 
 | Date | What I finished | Blockers / learnings |
@@ -1281,16 +1328,18 @@ Env: `JWT_SECRET`, `AUTH_USERNAME`, `AUTH_PASSWORD`, `WARM_RAG_ON_STARTUP` (see 
 | 2026-07-21 | Backend live on FastAPI Cloud | `fastapi[standard]` + `.python-version`; routes have no `/api` prefix; `ALLOWED_ORIGINS` env for CORS |
 | 2026-07-21 | FastAPI fundamentals lab: Depends, JWT, lifespan, BackgroundTasks, TestClient | `labs/fastapi_lab.py` + `tests/test_lab.py` (11 green); HTTPBearer missing header = 401 in current FastAPI |
 | 2026-07-22 | Apply lab → real app: JWT on `/rag/rebuild` + lifespan RAG warmup | `auth.py`, `routers/auth.py`; `/rag/upload` stays open for UI; `rag_eval` logs in before rebuild |
+| 2026-07-22 | Local vs cloud RAG collections + upload/redeploy trap | `ai_chat_docs_local` vs `ai_chat_docs`; rebuild only indexes this host’s `data/` |
+| 2026-07-22 | FastAPI lab Part 2: handling errors + APIRouter | `labs/fastapi_lab_part2.py`; custom handlers; router Depends; mapped to `routers/*` |
 
 ---
 
 ## Current focus
 
-> **Done:** Applied FastAPI lab to real backend — JWT protects `/rag/rebuild`; lifespan can warm RAG at startup.
+> **Done:** FastAPI tutorial lab Part 2 — handling errors + bigger apps / APIRouter (`labs/fastapi_lab_part2.py`).
 
 **Next learning options**
 
-1. **Redeploy** — set `JWT_SECRET` / `AUTH_*` / `WARM_RAG_ON_STARTUP` on FastAPI Cloud and redeploy
-2. **Continue tutorial** — handling errors, bigger apps/routers, SQL databases
-3. **Optional** — protect `/rag/upload` too (would need a token path in the Next.js UI)
+1. **Hands-on Part 2** — run on :8002, walk `/docs` checklist in the learning doc
+2. **Tutorial next** — [SQL databases](https://fastapi.tiangolo.com/tutorial/sql-databases/) (or Middleware / CORS review against `main.py`)
+3. **Redeploy** — auth env + separate `SUPABASE_COLLECTION` on FastAPI Cloud
 4. **Self-quiz** — redraw hybrid pipeline + name the 4 prompts from memory

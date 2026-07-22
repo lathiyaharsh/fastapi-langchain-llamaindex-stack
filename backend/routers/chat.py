@@ -7,6 +7,9 @@ Learning split:
 
 Helpers and Pydantic models stay in main.py; this module only owns HTTP wiring.
 
+Bigger-apps pattern (FastAPI tutorial): APIRouter + tags, mounted from main.py.
+See labs/fastapi_lab_part2.py for a minimal version of the same idea.
+
 Note: no `from __future__ import annotations` here — FastAPI must resolve
 `main.ChatRequest` at function-definition time inside create_chat_router().
 """

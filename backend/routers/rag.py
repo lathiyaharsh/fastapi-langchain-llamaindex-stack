@@ -10,6 +10,9 @@ Endpoints:
 Hybrid RAG lives in rag_hybrid.py (separate learning module).
 Helpers and Pydantic models stay in main.py; this module owns HTTP wiring.
 
+Bigger-apps pattern: APIRouter like labs/fastapi_lab_part2.py (shop_router).
+Errors: raise HTTPException — see that lab's handling-errors section.
+
 Note: no `from __future__ import annotations` here — FastAPI must resolve
 `main.RagRequest` at function-definition time inside create_rag_router().
 """
