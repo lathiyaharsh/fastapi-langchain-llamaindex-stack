@@ -1413,16 +1413,55 @@ Last `add_middleware(...)` = outermost on the way **in**.
 | 2026-07-22 | FastAPI lab Part 2: handling errors + APIRouter | `labs/fastapi_lab_part2.py`; custom handlers; router Depends; mapped to `routers/*` |
 | 2026-07-22 | FastAPI lab Part 3: SQLModel + SQLite CRUD | `labs/fastapi_lab_part3.py`; Session Depends; maps to “persist chat later” vs Supabase vectors |
 | 2026-07-22 | FastAPI lab Part 4: middleware + CORS peek | `labs/fastapi_lab_part4.py`; maps to `ops.py` logging/rate-limit + `CORSMiddleware` |
+| 2026-07-24 | Deep Agents customization lab (model/tools/prompt/MW/subagents/backends/sandboxes/HITL) | `labs/deepagents_lab.py` + `.venv-da` (Py3.12); maps to `create_agent` on `/chat` |
+
+---
+
+## Deep Agents customization lab (2026-07-24)
+
+Separate from `create_agent` on `/chat`. Code: `backend/labs/deepagents_lab.py`.
+
+Docs: https://docs.langchain.com/oss/python/deepagents/customization
+
+**Python note:** `deepagents` needs **Python ≥ 3.11**. Main backend `.venv` is 3.10 → use **`.venv-da`** (3.12).
+
+```bash
+# once
+export PATH="$HOME/.local/bin:$PATH"
+uv python install 3.12
+uv venv .venv-da --python 3.12
+uv pip install --python .venv-da/bin/python -r requirements-deepagents.txt
+
+# run lab
+.venv-da/bin/uvicorn labs.deepagents_lab:app --reload --port 8005
+# http://127.0.0.1:8005/docs
+
+# tests
+.venv-da/bin/python -m unittest tests.test_deepagents_lab -v
+```
+
+| Knob | `create_deep_agent(...)` | Maps to your stack |
+| --- | --- | --- |
+| **Model** | `model=` ChatGroq or `"provider:model"` | `get_model()` / `ChatGroq` |
+| **Tools** | `tools=[get_weather, …]` (+ built-in plan/files/task) | `CHAT_TOOLS` on `/chat` |
+| **System prompt** | `system_prompt=` prepended to deep-agent base | `chat_system_prompt()` |
+| **Middleware** | Agent hooks (`wrap_tool_call`, …) | ≠ FastAPI `ops.py` HTTP middleware |
+| **Subagents** | `subagents=[{name, description, system_prompt, tools}]` | You only have one agent today |
+| **Backends** | `StateBackend` (default) / `FilesystemBackend` | No agent FS yet |
+| **Sandboxes** | Isolated execute backends (E2B, LangSmith, …) | See comments in lab §7 |
+| **HITL** | `interrupt_on=` + `checkpointer=` | Pause before sensitive tools |
+
+Try: `GET /inspect` → `POST /run` with `"Say ok"` → `POST /hitl/start` then `/hitl/resume`.
 
 ---
 
 ## Current focus
 
-> **Done:** FastAPI tutorial lab Part 4 — Middleware / CORS mapped to `ops.py` + `main.py`.
+> **In progress:** Deep Agents customization lab (`labs/deepagents_lab.py` on :8005).
 
 **Next learning options**
 
-1. **Hands-on Part 4** — headers on `/hello`, 429 on `/blocked/x`, then re-read `ops.py`
-2. **Advanced tutorial peek** — WebSockets, or Background Tasks refresh vs Part 1 lab
-3. **Redeploy** — auth + separate Supabase collection on FastAPI Cloud
-4. **Self-quiz** — hybrid pipeline + 4 prompts from memory
+1. **Hands-on Deep Agents** — `/inspect`, `/run`, HITL start/resume in `/docs`
+2. **Compare** — `/chat` `create_agent` vs lab `create_deep_agent` (same Groq key)
+3. **Hands-on FastAPI Part 4** — headers on `/hello`, 429 on `/blocked/x`, re-read `ops.py`
+4. **Redeploy** — auth + separate Supabase collection on FastAPI Cloud

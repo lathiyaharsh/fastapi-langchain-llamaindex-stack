@@ -1,0 +1,10 @@
+{
+  "venvPath": "..",
+  "venv": ".venv-da",
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "error",
+  "extraPaths": [
+    "../.venv-da/lib/python3.12/site-packages"
+  ]
+}

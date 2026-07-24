@@ -5,11 +5,20 @@
   "typeCheckingMode": "basic",
   "reportMissingImports": "error",
   "extraPaths": [
-    ".venv/lib/python3.10/site-packages"
+    ".venv/lib/python3.10/site-packages",
+    ".venv-da/lib/python3.12/site-packages"
   ],
   "executionEnvironments": [
     {
+      "root": "labs",
+      "pythonVersion": "3.12",
+      "extraPaths": [
+        ".venv-da/lib/python3.12/site-packages"
+      ]
+    },
+    {
       "root": ".",
+      "pythonVersion": "3.10",
       "extraPaths": [
         ".venv/lib/python3.10/site-packages"
       ]
