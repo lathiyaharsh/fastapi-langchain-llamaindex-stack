@@ -1324,6 +1324,45 @@ cd backend
 
 ---
 
+## FastAPI lab Part 4 — Middleware (2026-07-22)
+
+Tutorial: [Middleware](https://fastapi.tiangolo.com/tutorial/middleware/) · [CORS](https://fastapi.tiangolo.com/tutorial/cors/)
+
+```bash
+cd backend
+.venv/bin/uvicorn labs.fastapi_lab_part4:app --reload --port 8004
+# http://127.0.0.1:8004/docs
+
+.venv/bin/python -m unittest tests.test_lab_part4 -v
+```
+
+### Mental model
+
+```text
+Request  →  [outer MW] → [inner MW] → route handler
+Response ←  [outer MW] ← [inner MW] ← route handler
+```
+
+Last `add_middleware(...)` = outermost on the way **in**.
+
+| Lab | Real app (`ops.py` / `main.py`) |
+| --- | --- |
+| `@app.middleware` + `X-Process-Time` | Timing half of `RequestLoggingMiddleware` |
+| `LabRequestIdMiddleware` | `X-Request-Id` on every response |
+| `LabBlockMiddleware` → 429 | `RateLimitMiddleware` on `/chat*` + `/rag*` |
+| `CORSMiddleware` | Same class; allows Next.js origins |
+
+[JS] `app.use(fn)` in Express — runs for every request.
+
+### Checklist
+
+- [ ] `GET /hello` → see `X-Process-Time` and `X-Lab-Request-Id` in response headers
+- [ ] `GET /blocked/x` → 429 (route body never returned)
+- [ ] Open `ops.py` and match the same `dispatch` / `call_next` pattern
+- [ ] Note order comment in `main.py`: rate-limit added before logging so 429s are logged
+
+---
+
 ## Progress log
 
 | Date | What I finished | Blockers / learnings |
@@ -1373,16 +1412,17 @@ cd backend
 | 2026-07-22 | Local vs cloud RAG collections + upload/redeploy trap | `ai_chat_docs_local` vs `ai_chat_docs`; rebuild only indexes this host’s `data/` |
 | 2026-07-22 | FastAPI lab Part 2: handling errors + APIRouter | `labs/fastapi_lab_part2.py`; custom handlers; router Depends; mapped to `routers/*` |
 | 2026-07-22 | FastAPI lab Part 3: SQLModel + SQLite CRUD | `labs/fastapi_lab_part3.py`; Session Depends; maps to “persist chat later” vs Supabase vectors |
+| 2026-07-22 | FastAPI lab Part 4: middleware + CORS peek | `labs/fastapi_lab_part4.py`; maps to `ops.py` logging/rate-limit + `CORSMiddleware` |
 
 ---
 
 ## Current focus
 
-> **Done:** FastAPI tutorial lab Part 3 — SQL databases with SQLModel + SQLite (`labs/fastapi_lab_part3.py`).
+> **Done:** FastAPI tutorial lab Part 4 — Middleware / CORS mapped to `ops.py` + `main.py`.
 
 **Next learning options**
 
-1. **Hands-on Part 3** — CRUD on :8003; restart uvicorn and confirm notes still in DB
-2. **Light apply** — sketch (don’t have to build) how `chat_sessions` could become a SQL table
-3. **Tutorial next** — Middleware review vs `ops.py` / CORS in `main.py`
-4. **Redeploy** — auth + separate Supabase collection on FastAPI Cloud
+1. **Hands-on Part 4** — headers on `/hello`, 429 on `/blocked/x`, then re-read `ops.py`
+2. **Advanced tutorial peek** — WebSockets, or Background Tasks refresh vs Part 1 lab
+3. **Redeploy** — auth + separate Supabase collection on FastAPI Cloud
+4. **Self-quiz** — hybrid pipeline + 4 prompts from memory
