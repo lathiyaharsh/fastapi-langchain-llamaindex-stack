@@ -4,6 +4,8 @@ A production-style AI assistant platform combining conversational chat, real-tim
 
 Built with **Next.js** on the front end and **FastAPI + LangChain + LlamaIndex** on the back end, this stack demonstrates a complete, deployable AI application — not just a single API call to a language model.
 
+Live demo: https://fastapi-langchain-llamaindex-stack.vercel.app/
+
 ## What it does
 
 - **Conversational Chat** — natural, streaming responses powered by Groq's LLMs via LangChain, with per-session memory so the assistant remembers context across turns.
