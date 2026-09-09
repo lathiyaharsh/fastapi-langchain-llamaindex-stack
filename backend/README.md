@@ -1,8 +1,8 @@
-# Learning backend (FastAPI + LangChain + LlamaIndex)
+# Backend — AI Chat & Knowledge Assistant API
 
-Python API for the FastAPI learning stack. Serves **chat** (LangChain + Groq) and **Ask My Docs** (LlamaIndex RAG + Supabase pgvector). The Next.js UI in [`../web/`](../web/) proxies to this server on port **8000**.
+The Python API powering the assistant: streaming **chat** (LangChain + Groq), live **tool calling**, and document-grounded **RAG Q&A** (LlamaIndex + Supabase pgvector). The Next.js UI in [`../web/`](../web/) talks to this service on port **8000**.
 
-Stack: **FastAPI** · **Uvicorn** · **LangChain** · **LlamaIndex** · **Groq** · **Hugging Face Inference API** · **Supabase (pgvector)**
+**Stack:** FastAPI · Uvicorn · LangChain · LlamaIndex · Groq · Hugging Face Inference API · Supabase (pgvector)
 
 ## Prerequisites
 
@@ -10,15 +10,13 @@ Stack: **FastAPI** · **Uvicorn** · **LangChain** · **LlamaIndex** · **Groq**
 | --- | --- |
 | Python | 3.10+ |
 
-API keys:
-
-| Key | Required for |
+| API key | Required for |
 | --- | --- |
-| `GROQ_API_KEY` | Chat + RAG answers |
-| `HUGGINGFACE_API_KEY` | Ask My Docs embeddings |
-| `SUPABASE_DB_URL` | Ask My Docs vector storage |
+| `GROQ_API_KEY` | Chat and RAG-generated answers |
+| `HUGGINGFACE_API_KEY` | Document embeddings (Ask My Docs) |
+| `SUPABASE_DB_URL` | Vector storage (Ask My Docs) |
 
-Chat works with only Groq. Ask My Docs needs all three.
+Chat runs with only a Groq key. Ask My Docs needs all three.
 
 ## Setup
 
@@ -26,158 +24,156 @@ Chat works with only Groq. Ask My Docs needs all three.
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-python -m pip install --upgrade pip
+pip install --upgrade pip
 pip install -r requirements.txt
 cp .env.example .env
 ```
 
 Edit `.env` and set at least `GROQ_API_KEY`. For Ask My Docs, also set `HUGGINGFACE_API_KEY` and `SUPABASE_DB_URL`.
 
-## Environment variables
+## Running the server
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `GROQ_API_KEY` | — | Groq LLM for chat and RAG |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Chat / RAG model name |
-| `GROQ_TEMPERATURE` | `0.7` | Default sampling temp; override per `/chat` request |
-| `GROQ_TIMEOUT_SECONDS` | `60` | Groq HTTP timeout → HTTP 504 on hang |
-| `RATE_LIMIT_PER_MINUTE` | `60` | Per-IP limit on `/chat*` + `/rag*` (`0` disables) |
-| `JWT_SECRET` | `learning-only-change-me` | Signs Bearer tokens for `/rag/rebuild` |
-| `AUTH_USERNAME` / `AUTH_PASSWORD` | `alice` / `wonderland` | Login for `POST /auth/login` |
-| `JWT_TTL_MINUTES` | `30` | Token lifetime |
-| `WARM_RAG_ON_STARTUP` | `true` | Lifespan loads RAG index at boot (`false` = faster local start) |
-| `HUGGINGFACE_API_KEY` | — | Cloud embeddings (no local torch) |
-| `HF_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model |
-| `HF_EMBED_DIM` | `384` | Must match Supabase collection dim |
-| `SUPABASE_DB_URL` | — | Postgres URI (`postgresql://…`) |
-| `SUPABASE_COLLECTION` | `ai_chat_docs` | Vector collection name |
-| `RAG_MAX_UPLOAD_BYTES` | `2097152` (2 MB) | Upload size limit |
-| `RAG_SOURCE_SCORE_GAP` | `0.08` | Filter weak RAG source chunks |
-| `RAG_CHUNK_SIZE` | `512` | SentenceSplitter chunk size (tokens-ish) |
-| `RAG_CHUNK_OVERLAP` | `64` | Overlap between chunks; change + `/rag/rebuild` |
-| `RAG_RERANK_ENABLED` | `true` | Keyword rerank on `/rag-hybrid` after vector search |
-| `RAG_RETRIEVE_TOP_K` | `6` | Vector candidates fetched before rerank |
-| `RAG_RERANK_TOP_K` | `3` | Chunks kept after rerank (fed to Groq) |
-
-Never commit `.env`.
-
-## Run
-
-Always use the venv (or call `.venv/bin/uvicorn` directly). System `uvicorn` outside the venv will miss packages like `langchain_groq`.
+Always run inside the virtual environment — the system-wide `uvicorn` won't have the required packages installed.
 
 ```bash
 source .venv/bin/activate
-which uvicorn   # should be .../backend/.venv/bin/uvicorn
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-| URL | What |
+| URL | Purpose |
 | --- | --- |
-| http://127.0.0.1:8000 | Root |
-| http://127.0.0.1:8000/docs | Swagger UI |
-| http://127.0.0.1:8000/health | Key / config check |
+| http://127.0.0.1:8000 | API root |
+| http://127.0.0.1:8000/docs | Interactive API documentation (Swagger UI) |
+| http://127.0.0.1:8000/health | Configuration / readiness check |
 
-## API endpoints
+## Configuration reference
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GROQ_API_KEY` | — | Groq LLM key for chat and RAG |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Model used for chat / RAG |
+| `GROQ_TEMPERATURE` | `0.7` | Default sampling temperature (overridable per request) |
+| `GROQ_TIMEOUT_SECONDS` | `60` | LLM request timeout (returns HTTP 504 on timeout) |
+| `RATE_LIMIT_PER_MINUTE` | `60` | Per-IP limit on chat and RAG routes (`0` disables) |
+| `JWT_SECRET` | *(placeholder — change for production)* | Signs admin auth tokens |
+| `AUTH_USERNAME` / `AUTH_PASSWORD` | *(sample credentials)* | Login for `POST /auth/login` |
+| `JWT_TTL_MINUTES` | `30` | Admin token lifetime |
+| `WARM_RAG_ON_STARTUP` | `true` | Preload the RAG index at startup |
+| `HUGGINGFACE_API_KEY` | — | Hosted embeddings (no local model download) |
+| `HF_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model |
+| `HF_EMBED_DIM` | `384` | Must match the Supabase collection dimension |
+| `SUPABASE_DB_URL` | — | Postgres connection string (`postgresql://…`) |
+| `SUPABASE_COLLECTION` | `ai_chat_docs` | Vector collection name |
+| `RAG_MAX_UPLOAD_BYTES` | `2097152` (2 MB) | Max document upload size |
+| `RAG_SOURCE_SCORE_GAP` | `0.08` | Filters weak source matches from responses |
+| `RAG_CHUNK_SIZE` | `512` | Document chunk size for indexing |
+| `RAG_CHUNK_OVERLAP` | `64` | Overlap between chunks (re-run `/rag/rebuild` after changing) |
+| `RAG_RERANK_ENABLED` | `true` | Enables keyword reranking on `/rag-hybrid` |
+| `RAG_RETRIEVE_TOP_K` | `6` | Candidate chunks fetched before reranking |
+| `RAG_RERANK_TOP_K` | `3` | Chunks kept after reranking (sent to the LLM) |
+
+**Update `AUTH_USERNAME`, `AUTH_PASSWORD`, and `JWT_SECRET` before any production or client-facing deployment.** Never commit `.env`.
+
+## API reference
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/` | Hello |
-| `GET` | `/health` | Config flags (no secrets) |
-| `POST` | `/chat` | Full JSON chat reply |
-| `POST` | `/chat/stream` | SSE token stream (used by the web UI) |
-| `DELETE` | `/chat/session/{id}` | Clear in-memory chat history |
-| `POST` | `/auth/login` | Username/password → JWT (`Bearer` token) |
-| `GET` | `/auth/me` | Who am I? (requires Bearer token) |
+| `GET` | `/` | Service info |
+| `GET` | `/health` | Configuration and readiness status |
+| `POST` | `/chat` | Full (non-streaming) chat reply |
+| `POST` | `/chat/stream` | Streaming chat reply (Server-Sent Events) — used by the web UI |
+| `DELETE` | `/chat/session/{id}` | Clear a chat session's history |
+| `POST` | `/auth/login` | Exchange username/password for a JWT |
+| `GET` | `/auth/me` | Verify the current bearer token |
 | `POST` | `/rag` | Document Q&A |
-| `POST` | `/rag-hybrid` | LlamaIndex retrieve + LangChain/Groq answer |
-| `DELETE` | `/rag-hybrid/session/{id}` | Clear hybrid RAG chat history |
-| `POST` | `/rag/upload` | Upload `.md` / `.txt` (incremental insert) |
-| `POST` | `/rag/rebuild` | Re-embed everything in `data/` (**JWT required**) |
-| `DELETE` | `/rag/session/{id}` | Clear RAG conversation (keeps vectors) |
+| `POST` | `/rag-hybrid` | Document Q&A with LlamaIndex retrieval + LangChain/Groq answer generation |
+| `DELETE` | `/rag-hybrid/session/{id}` | Clear a hybrid RAG session |
+| `POST` | `/rag/upload` | Upload a `.md` / `.txt` document for incremental indexing |
+| `POST` | `/rag/rebuild` | Re-index all documents in `data/` (**requires authentication**) |
+| `DELETE` | `/rag/session/{id}` | Clear a RAG conversation (keeps the indexed vectors) |
 
-### Chat notes
+### Chat
 
-- `/chat` uses LangChain **`create_agent`** (automatic tool loop). `/chat/stream` uses the **manual** `bind_tools` loop (what the web UI calls). Same `get_weather` tool on both. Try: *"What's the weather in London?"*
-- Requests may include `history` so context survives reload.
-- `/chat/stream` skips `remember()` if the client disconnects (Stop button).
+- Supports live tool calling — the assistant can fetch real-time data (e.g. current weather) instead of guessing.
+- Conversation history can be supplied by the client or kept server-side per session.
+- If a client disconnects mid-stream, the partial response is not saved to history.
 
-### RAG notes
+### Document Q&A (RAG)
 
-- Vectors live in **Supabase Postgres (pgvector)**, not only in memory.
-- Source files live in `backend/data/`. After editing them, call `POST /rag/rebuild`.
-- Upload accepts `.md` / `.txt` only; duplicate filenames return `409`.
-- Chunking uses `SentenceSplitter` (`RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP`, default 512/64). After changing either, call `POST /rag/rebuild`.
-- `/rag` = LlamaIndex chat engine end-to-end (`CONDENSE_PLUS_CONTEXT`).
-- `/rag-hybrid` = LlamaIndex retrieval only, then LangChain/Groq writes the final answer. Response also includes `retrieval_query` so you can inspect what got sent to retrieval.
-- `/rag-hybrid` reranking: fetch `RAG_RETRIEVE_TOP_K` by embedding, reorder by keyword overlap, keep `RAG_RERANK_TOP_K`. Response includes `rerank_applied`.
+- Documents are chunked, embedded, and stored in **Postgres with pgvector**, so the knowledge base persists across restarts.
+- Source documents live in `backend/data/`. After adding or editing files there, call `POST /rag/rebuild` to re-index.
+- Uploads accept `.md` and `.txt` files; duplicate filenames are rejected.
+- `/rag` handles retrieval and answer generation in one step. `/rag-hybrid` exposes the retrieval query and applies an additional keyword-based reranking pass for improved relevance — useful when you need visibility into what was retrieved.
 
-### Phase 6 (ops)
+### Reliability & observability
 
-- Structured request logs: `request_id`, method, path, status, `latency_ms` (see uvicorn console). Responses include `X-Request-Id`.
-- Rate limit: `RATE_LIMIT_PER_MINUTE` on `/chat*` and `/rag*` → HTTP `429` + `Retry-After`.
-- LLM timeout: `GROQ_TIMEOUT_SECONDS` on ChatGroq / LlamaIndex Groq → HTTP `504` (friendly message).
-- pgvector index tuning: backend auto-creates a cosine index on `vecs.ai_chat_docs` after ingest/load to reduce query warnings and improve retrieval speed.
+- Every request is logged with a unique request ID, method, path, status, and latency; the ID is returned in the `X-Request-Id` response header.
+- Per-IP rate limiting on chat and RAG routes returns HTTP `429` with a `Retry-After` header when exceeded.
+- LLM calls that exceed `GROQ_TIMEOUT_SECONDS` return a clean HTTP `504` instead of hanging.
+- A vector index is maintained automatically on the pgvector table to keep retrieval fast as the document set grows.
 
 ## Vector store: Supabase + pgvector
 
-1. Create a free project at https://supabase.com
-2. SQL Editor — run:
+1. Create a free project at [supabase.com](https://supabase.com).
+2. In the SQL Editor, run:
 
-```sql
-create extension if not exists vector;
-```
+   ```sql
+   create extension if not exists vector;
+   ```
 
-3. Dashboard → **Connect** → copy the **URI**
-   - Prefer **Session pooler** (`*.pooler.supabase.com`) if direct DB host fails
-   - Use `postgresql://` (not `postgres://`)
-   - Replace `[YOUR-PASSWORD]` with your DB password
-   - Special characters in the password are URL-encoded by the backend
-4. Set `SUPABASE_DB_URL=...` in `backend/.env`
-5. Restart uvicorn, then:
+3. Go to **Connect** in the dashboard and copy the connection **URI**:
+   - Prefer the **Session pooler** host if the direct connection fails.
+   - Use the `postgresql://` scheme (not `postgres://`).
+   - Replace `[YOUR-PASSWORD]` with your database password.
+4. Set `SUPABASE_DB_URL` in `backend/.env`.
+5. Restart the server and verify:
 
-```bash
-curl -s http://127.0.0.1:8000/health   # supabase_configured should be true
-TOKEN=$(curl -s -X POST http://127.0.0.1:8000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"alice","password":"wonderland"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-curl -s -X POST http://127.0.0.1:8000/rag/rebuild -H "Authorization: Bearer $TOKEN"
-curl -s -X POST http://127.0.0.1:8000/rag \
-  -H "Content-Type: application/json" \
-  -d '{"question":"What is the fridge password?"}'
-```
+   ```bash
+   curl -s http://127.0.0.1:8000/health   # expect "supabase_configured": true
 
-`/rag/rebuild` requires a JWT from `/auth/login` (defaults: `alice` / `wonderland`). Chat, `/rag`, and `/rag/upload` stay open for the learning UI.
+   TOKEN=$(curl -s -X POST http://127.0.0.1:8000/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"username":"<your-username>","password":"<your-password>"}' \
+     | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-## Next.js integration (`web/`)
+   curl -s -X POST http://127.0.0.1:8000/rag/rebuild -H "Authorization: Bearer $TOKEN"
 
-The learning UI is in **`fastapi-stack/web/`** (port **3001**). See [../web/README.md](../web/README.md).
+   curl -s -X POST http://127.0.0.1:8000/rag \
+     -H "Content-Type: application/json" \
+     -d '{"question":"What is this document about?"}'
+   ```
 
-| UI mode | Next.js | FastAPI |
+`/rag/rebuild` requires authentication. Chat and standard document Q&A remain open for end users.
+
+## Frontend integration
+
+The web UI lives in [`../web/`](../web/) and runs on port **3001**. See [../web/README.md](../web/README.md) for details.
+
+| UI action | Next.js route | FastAPI endpoint |
 | --- | --- | --- |
 | Chat | `POST /api/chat` | `POST /chat/stream` |
 | Ask My Docs | `POST /api/rag` | `POST /rag` |
-| Upload doc | `POST /api/rag/upload` | `POST /rag/upload` |
+| Upload document | `POST /api/rag/upload` | `POST /rag/upload` |
 | Clear chat | `DELETE /api/chat/session` | `DELETE /chat/session/{id}` |
-| Clear docs | `DELETE /api/rag?session_id=` | `DELETE /rag/session/{id}` |
+| Clear documents | `DELETE /api/rag?session_id=` | `DELETE /rag/session/{id}` |
 
-Browser → Next.js BFF → this FastAPI app. API keys stay in `backend/.env` only.
+The browser only talks to Next.js — API keys and database credentials never leave the server.
 
 ## Project layout
 
 ```text
 backend/
-  main.py           # App, helpers, models, health
+  main.py               App setup, request/response models, health check
   routers/
-    chat.py         # /chat, /chat/stream, clear session
-    rag.py          # /rag, rebuild, upload, clear session
-  rag_hybrid.py     # /rag-hybrid (+ keyword rerank)
-  ops.py            # logging + rate limit middleware
-  rag_eval.py       # quick RAG quality checks
+    chat.py              Chat endpoints and session management
+    rag.py                Document Q&A, upload, rebuild
+  rag_hybrid.py          Hybrid retrieval + reranking pipeline
+  ops.py                  Logging and rate-limiting middleware
+  rag_eval.py             RAG quality evaluation script
   requirements.txt
   .env.example
-  data/             # RAG source docs (.md / .txt)
+  data/                   Source documents for the knowledge base
   tests/
-    test_main.py
 ```
 
 ## Tests
@@ -186,81 +182,70 @@ backend/
 .venv/bin/python -m unittest tests.test_main -v
 ```
 
-## RAG eval (quick quality check)
+## RAG quality evaluation
 
-Run fixed question checks on `/rag` and `/rag-hybrid` with pass/fail + latency:
+Run a fixed set of test questions against both RAG endpoints, with pass/fail and latency reporting:
 
 ```bash
 .venv/bin/python rag_eval.py --rebuild
 ```
 
-Try chunking A/B in one command:
+Compare chunking strategies in one command:
 
 ```bash
 .venv/bin/python rag_eval.py --rebuild --chunk-size 256 --chunk-overlap 64
 ```
 
-Latency profile (5 questions × both endpoints = 10 timed calls + warm-up):
+Latency profiling:
 
 ```bash
 .venv/bin/python rag_eval.py --profile
 ```
 
-Looks at `by_endpoint` (`avg_ms`, `p50_ms`, `p95_ms`) and `comparison.faster_avg`.
+## Deploy to the cloud
 
-## Deploy to the cloud (live backend)
-
-Easiest path for learning: **[Render](https://render.com)** (free web service) or **[Railway](https://railway.app)**. No Docker required.
+The service deploys to any standard Python web host with no containerization required.
 
 ### Render (recommended)
 
-1. Push this repo to GitHub (do **not** commit `backend/.env`).
-2. [Render Dashboard](https://dashboard.render.com) → **New** → **Web Service** → connect the repo.
-3. Settings:
+1. Push the repository to GitHub (do **not** commit `backend/.env`).
+2. In the [Render Dashboard](https://dashboard.render.com), create a **New Web Service** from the repo.
+3. Configure:
    - **Root Directory:** `backend`
    - **Runtime:** Python 3
    - **Build Command:** `pip install -r requirements.txt`
    - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
-4. **Environment** (same as local `.env`):
+4. Set environment variables (same as local `.env`):
    - `GROQ_API_KEY`
-   - `HUGGINGFACE_API_KEY` (for Ask My Docs)
-   - `SUPABASE_DB_URL` (for Ask My Docs)
-   - Optional: `GROQ_MODEL`, `ALLOWED_ORIGINS` (your Vercel/frontend URL)
-5. Deploy → open `https://YOUR-SERVICE.onrender.com/health` — expect `{"status":"ok",...}`.
-6. Point the Next.js UI at it: in `web/.env.local` (or Vercel env):
+   - `HUGGINGFACE_API_KEY` and `SUPABASE_DB_URL` (for Ask My Docs)
+   - `AUTH_USERNAME`, `AUTH_PASSWORD`, `JWT_SECRET` (set real production values)
+   - `ALLOWED_ORIGINS` (your frontend's URL)
+5. Deploy, then verify `https://YOUR-SERVICE.onrender.com/health` returns `{"status":"ok", ...}`.
+6. Point the frontend at the deployed API by setting `FASTAPI_URL` (in `web/.env.local` or your hosting provider's environment settings) to your service URL.
 
-```bash
-FASTAPI_URL=https://YOUR-SERVICE.onrender.com
-```
-
-Then restart `npm run dev` (or redeploy the frontend).
-
-Free Render services sleep after idle; first request can take ~30–60s.
+Free-tier services may sleep when idle; the first request after inactivity can take 30–60 seconds.
 
 ### Railway
 
-1. New project → Deploy from GitHub → set root to `backend`.
-2. Add the same env vars.
-3. Start command (or use `Procfile`): `uvicorn main:app --host 0.0.0.0 --port $PORT`.
-4. Copy the public URL into `FASTAPI_URL` as above.
+1. Create a new project, deploy from GitHub, and set the root directory to `backend`.
+2. Add the same environment variables as above.
+3. Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT` (or use the included `Procfile`).
+4. Point `FASTAPI_URL` at the deployed URL as above.
 
 ### CORS
 
-If the browser calls FastAPI directly (not only via Next.js proxy), set:
+If the browser will call the API directly (rather than only through the Next.js proxy), set:
 
 ```bash
-ALLOWED_ORIGINS=https://your-frontend.vercel.app
+ALLOWED_ORIGINS=https://your-frontend-domain.com
 ```
-
-Next.js server routes use `FASTAPI_URL` server-side, so CORS is often not needed for the UI proxy path.
 
 ## Troubleshooting
 
 | Problem | Fix |
 | --- | --- |
-| `No module named 'langchain_groq'` | Activate venv or run `.venv/bin/uvicorn ...` |
-| `bash: .venv/bin/activate: No such file` | Run `python3 -m venv .venv` inside `backend/` |
-| Ask My Docs errors | Set `HUGGINGFACE_API_KEY` + `SUPABASE_DB_URL`, then `POST /rag/rebuild` |
-| Empty / weak RAG answers | Rebuild index; check `data/` files and Supabase table `vecs.ai_chat_docs` |
+| `No module named 'langchain_groq'` | Activate the virtual environment or run `.venv/bin/uvicorn ...` |
+| Ask My Docs returns errors | Set `HUGGINGFACE_API_KEY` and `SUPABASE_DB_URL`, then call `POST /rag/rebuild` |
+| Weak or empty RAG answers | Rebuild the index and confirm the `data/` files and Supabase table contain the expected content |
 
-Full stack (both terminals): [../README.md](../README.md). Learning checklist: [../LEARNING_LANGCHAIN_LLAMAINDEX_FASTAPI.md](../LEARNING_LANGCHAIN_LLAMAINDEX_FASTAPI.md).
+Full stack setup: [../README.md](../README.md)

@@ -1,14 +1,14 @@
-# Learning UI (Next.js)
+# Web — AI Chat & Knowledge Assistant UI
 
-Next.js front end for the FastAPI learning stack. Runs on **port 3001** and proxies chat / Ask My Docs to the Python backend.
+The Next.js front end for the assistant. Provides the chat interface and document Q&A experience, and proxies requests to the FastAPI backend so API keys never reach the browser.
 
-Stack: **Next.js 15** (App Router) · **React 19** · **Tailwind CSS 4** · **TypeScript** · **Vitest**
+**Stack:** Next.js 15 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · Vitest
 
 ## Prerequisites
 
 - Node.js 18+
 - npm 9+
-- FastAPI backend running on port 8000 (see [../backend/README.md](../backend/README.md))
+- The backend running on port 8000 — see [../backend/README.md](../backend/README.md)
 
 ## Setup
 
@@ -18,15 +18,15 @@ cp .env.example .env.local
 npm install
 ```
 
-`.env.local` only needs the backend URL (default is fine if FastAPI is on port 8000):
+`.env.local` only needs the backend URL (the default already matches a locally running backend):
 
 ```bash
 FASTAPI_URL=http://127.0.0.1:8000
 ```
 
-API keys live in the backend `.env`, not here.
+API keys and secrets live only in the backend's `.env` — never in the frontend.
 
-## Run
+## Running the app
 
 ```bash
 npm run dev
@@ -34,61 +34,60 @@ npm run dev
 
 Open **http://localhost:3001**.
 
-Other scripts:
-
 | Command | Description |
 | --- | --- |
-| `npm run build` | Production build |
-| `npm start` | Serve production build |
-| `npm run lint` | ESLint |
-| `npm run format` | Prettier write |
-| `npm test` | Vitest unit tests |
+| `npm run dev` | Start the development server (port 3001) |
+| `npm run build` | Create a production build |
+| `npm start` | Serve the production build |
+| `npm run lint` | Run ESLint |
+| `npm run format` | Format code with Prettier |
+| `npm test` | Run the unit test suite (Vitest) |
 
 ## Features
 
-- **Chat** — streaming replies via SSE (Groq + LangChain on the backend)
-- **Ask My Docs** — RAG Q&A over uploaded docs (LlamaIndex + Supabase)
-- Markdown rendering with syntax highlighting
-- Local chat history / session persistence (separate keys from the classic AI-Chat app)
-- Export chat
+- **Chat** — real-time streaming responses over Server-Sent Events, with per-session history.
+- **Ask My Docs** — retrieval-augmented Q&A over uploaded or pre-loaded documents.
+- Rendered Markdown responses with syntax-highlighted code blocks.
+- Local session persistence, so conversations survive a page reload.
+- One-click chat export.
 
-## API routes (Next → FastAPI)
+## How it talks to the backend
 
-| UI action | Next.js route | FastAPI |
+The browser only calls Next.js API routes; those routes forward requests to FastAPI server-side, keeping the backend URL and any credentials off the client.
+
+| UI action | Next.js route | FastAPI endpoint |
 | --- | --- | --- |
-| Chat (stream) | `POST /api/chat` | `POST /chat/stream` |
+| Chat (streaming) | `POST /api/chat` | `POST /chat/stream` |
 | Clear chat session | `DELETE /api/chat/session` | `DELETE /chat/session/{id}` |
 | Ask My Docs | `POST /api/rag` | `POST /rag` |
-| Upload doc | `POST /api/rag/upload` | `POST /rag/upload` |
-| Clear docs | `DELETE /api/rag?session_id=` | `DELETE /rag/session/{id}` |
-
-The browser talks only to Next.js; server routes forward to `FASTAPI_URL`.
+| Upload document | `POST /api/rag/upload` | `POST /rag/upload` |
+| Clear documents | `DELETE /api/rag?session_id=` | `DELETE /rag/session/{id}` |
 
 ## Project layout
 
 ```text
 web/
   app/
-    page.tsx              # Main UI
+    page.tsx              Main application UI
     layout.tsx
-    api/chat/             # Chat proxy + session
-    api/rag/              # RAG query + upload
+    api/chat/              Chat proxy routes
+    api/rag/                Document Q&A proxy routes
   components/
-    FastApiChat.tsx       # Chat / Ask My Docs UI
-    MarkdownContent.tsx
+    FastApiChat.tsx        Chat / Ask My Docs interface
+    MarkdownContent.tsx    Markdown + code rendering
   lib/
-    config.ts             # FASTAPI_URL
-    api/                  # Client, validation, rate limit
-    sse.ts / sse-client.ts
-    chat-storage.ts
+    config.ts               Backend URL configuration
+    api/                     API client, validation, rate limiting
+    sse.ts / sse-client.ts   Streaming response handling
+    chat-storage.ts          Session persistence
 ```
 
 ## Troubleshooting
 
 | Problem | Fix |
 | --- | --- |
-| UI cannot reach API | Confirm backend is on `:8000` and `FASTAPI_URL` in `.env.local` matches |
-| Chat / RAG errors | Check backend logs and `backend/.env` keys (`GROQ_API_KEY`, etc.) |
-| Port already in use | Dev server is fixed to **3001** in `package.json` |
+| UI can't reach the API | Confirm the backend is running on port 8000 and `FASTAPI_URL` in `.env.local` matches |
+| Chat or document Q&A errors | Check the backend logs and confirm its `.env` keys are set |
+| Port already in use | The dev server is fixed to port **3001** in `package.json` |
 
-Full stack setup (both terminals): [../README.md](../README.md).
+Full stack setup: [../README.md](../README.md)

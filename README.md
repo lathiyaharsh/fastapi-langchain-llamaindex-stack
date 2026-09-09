@@ -1,150 +1,157 @@
-# FastAPI learning stack
+# AI Chat & Knowledge Assistant
 
-Separate from the original **AI-Chat** Next.js app. This folder is self-contained:
+A production-style AI assistant platform combining conversational chat, real-time tool use, and document-grounded question answering (RAG) over your own content.
+
+Built with **Next.js** on the front end and **FastAPI + LangChain + LlamaIndex** on the back end, this stack demonstrates a complete, deployable AI application — not just a single API call to a language model.
+
+## What it does
+
+- **Conversational Chat** — natural, streaming responses powered by Groq's LLMs via LangChain, with per-session memory so the assistant remembers context across turns.
+- **Live Tool Use** — the assistant can call live external tools (e.g. real-time weather) when a question needs current, factual data instead of guessing.
+- **Ask My Docs (RAG)** — upload your own documents (Markdown / text) and get answers grounded in that content, with retrieval powered by LlamaIndex and a Postgres/pgvector vector store.
+- **Secure by default** — authenticated admin actions, per-IP rate limiting, request logging, and sanitized error responses.
+
+## Architecture
 
 ```text
-fastapi-stack/
-  backend/     Python FastAPI + LangChain + LlamaIndex (port 8000)
-  web/         Next.js UI for chat + Ask My Docs (port 3001)
+ Browser
+   │
+   ▼
+ Next.js (UI + BFF)         →  Streaming chat UI, session storage, API proxy
+   │  HTTPS
+   ▼
+ FastAPI (AI service)       →  Auth, validation, rate limiting, orchestration
+   │
+   ├── LangChain  → prompts, memory, tool calling      →  Groq LLM
+   └── LlamaIndex → chunking, embeddings, retrieval     →  Postgres (pgvector)
 ```
 
-The root `AI-Chat` project at `../` stays the **classic multi-provider** demo (Groq/Gemini/HF via Next.js only).
+The browser only ever talks to Next.js. All model provider keys and database credentials stay server-side in the FastAPI service.
 
-## Prerequisites
+## Tech stack
 
-Install these before you start:
+| Layer | Technology |
+| --- | --- |
+| Frontend | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS |
+| Backend | FastAPI, Uvicorn, Python 3.10+ |
+| AI orchestration | LangChain (chat, memory, tools) |
+| Retrieval / RAG | LlamaIndex, Hugging Face embeddings |
+| LLM provider | Groq |
+| Vector store | Supabase Postgres (pgvector) |
+| Auth | JWT (admin-only routes) |
 
-| Tool | Version | Check |
-| --- | --- | --- |
-| Python | 3.10+ | `python3 --version` |
-| Node.js | 18+ | `node --version` |
-| npm | 9+ | `npm --version` |
+## Project structure
 
-You will also need API keys:
+```text
+├── backend/     FastAPI service — chat, tools, RAG, auth (port 8000)
+└── web/         Next.js UI — chat interface + document Q&A (port 3001)
+```
 
-- **Groq** (required for chat) — https://console.groq.com
-- **Hugging Face** (required for Ask My Docs embeddings) — https://huggingface.co/settings/tokens
-- **Supabase** (required for Ask My Docs vector storage) — https://supabase.com
+Each part has its own detailed README: [backend/README.md](./backend/README.md) · [web/README.md](./web/README.md)
 
-Chat works with only `GROQ_API_KEY`. Ask My Docs needs all three.
+## Getting started
 
-## First-time setup
+### Prerequisites
 
-Run these steps once from the `fastapi-stack/` folder.
+| Tool | Version |
+| --- | --- |
+| Python | 3.10+ |
+| Node.js | 18+ |
+| npm | 9+ |
 
-### 1. Backend (Python)
+You'll need accounts/API keys for:
+
+- **[Groq](https://console.groq.com)** — required for chat
+- **[Hugging Face](https://huggingface.co/settings/tokens)** — required for document embeddings (Ask My Docs)
+- **[Supabase](https://supabase.com)** — required for vector storage (Ask My Docs)
+
+> Chat works with only a Groq key. Ask My Docs requires all three.
+
+### 1. Backend setup
 
 ```bash
 cd backend
-
-# Create and activate a virtual environment (do this inside backend/, not AI-Chat/)
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
-python -m pip install --upgrade pip
+pip install --upgrade pip
 pip install -r requirements.txt
 
 cp .env.example .env
 ```
 
-Edit `backend/.env` and set at least:
+Edit `backend/.env` and set at minimum:
 
 ```bash
 GROQ_API_KEY=your_groq_api_key_here
 ```
 
-For **Ask My Docs**, also set `HUGGINGFACE_API_KEY` and `SUPABASE_DB_URL`. See [backend/README.md](./backend/README.md) for Supabase/pgvector setup.
+For Ask My Docs, also set `HUGGINGFACE_API_KEY` and `SUPABASE_DB_URL` — see [backend/README.md](./backend/README.md#vector-store-supabase--pgvector) for the full Supabase setup.
 
-Verify the venv is active — `which uvicorn` should point inside `backend/.venv/`:
-
-```bash
-which uvicorn
-# expected: .../fastapi-stack/backend/.venv/bin/uvicorn
-```
-
-If it shows `~/.local/bin/uvicorn` or `/usr/bin/uvicorn`, the venv is not active. Run `source .venv/bin/activate` again, or use `.venv/bin/uvicorn` directly.
-
-### 2. Web (Next.js)
-
-Open a **new** terminal:
+### 2. Frontend setup
 
 ```bash
 cd web
-
 cp .env.example .env.local
 npm install
 ```
 
-`web/.env.local` only needs the backend URL (default is fine if you run FastAPI on port 8000):
+The default `FASTAPI_URL` already points at the local backend, so no changes are needed for local development.
+
+### 3. Run the app
+
+Two terminals — backend first, then the UI:
 
 ```bash
-FASTAPI_URL=http://127.0.0.1:8000
-```
-
-## Run (two terminals)
-
-Start the backend first, then the web UI.
-
-### Terminal 1 — Python backend
-
-```bash
+# Terminal 1 — backend
 cd backend
 source .venv/bin/activate
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- API: http://127.0.0.1:8000
-- Docs: http://127.0.0.1:8000/docs
-- Health: http://127.0.0.1:8000/health
-
-### Terminal 2 — Next.js UI
-
 ```bash
+# Terminal 2 — frontend
 cd web
 npm run dev
 ```
 
 Open **http://localhost:3001**.
 
-## Quick health check
+| Service | URL |
+| --- | --- |
+| Web app | http://localhost:3001 |
+| API | http://127.0.0.1:8000 |
+| Interactive API docs | http://127.0.0.1:8000/docs |
+| Health check | http://127.0.0.1:8000/health |
 
-After the backend is running:
+### Verify it's running
 
 ```bash
 curl -s http://127.0.0.1:8000/health
 ```
 
-You should see JSON with `status: "ok"`. If you configured Supabase, `supabase_configured` should be `true`.
+A healthy response returns `"status": "ok"`. If Supabase is configured, `supabase_configured` will be `true`.
 
-## What the web app does
-
-- **Chat** → `POST /api/chat` → FastAPI `/chat/stream` (Groq + LangChain)
-- **Ask My Docs** → `POST /api/rag` → FastAPI `/rag` (LlamaIndex + Supabase)
-- Same visual style as the original chat UI
-- Separate localStorage keys and session IDs from the classic app
-
-## Troubleshooting
-
-| Problem | Fix |
-| --- | --- |
-| `No module named 'langchain_groq'` | Activate the venv (`source .venv/bin/activate`) or run `.venv/bin/uvicorn ...` |
-| `bash: .venv/bin/activate: No such file` | Run `python3 -m venv .venv` from inside `backend/` first |
-| `pip install` fails on llama-index packages | Make sure you are on the latest `requirements.txt` from this repo |
-| Ask My Docs errors | Set `HUGGINGFACE_API_KEY` and `SUPABASE_DB_URL` in `backend/.env`, then `POST /rag/rebuild` |
-| Web UI cannot reach API | Confirm backend is on port 8000 and `FASTAPI_URL` in `web/.env.local` matches |
-
-More backend detail (Supabase SQL, RAG rebuild, curl examples): [backend/README.md](./backend/README.md).
-
-## Learning checklist
-
-See [LEARNING_LANGCHAIN_LLAMAINDEX_FASTAPI.md](./LEARNING_LANGCHAIN_LLAMAINDEX_FASTAPI.md).
-
-## Tests
+## Testing
 
 ```bash
 # Backend
 cd backend && .venv/bin/python -m unittest tests.test_main -v
 
-# Web
+# Frontend
 cd web && npm test
 ```
+
+## Deployment
+
+The backend deploys as a standard Python web service (Render, Railway, Fly.io, etc.) and the frontend deploys as a standard Next.js app (Vercel, Render, etc.). Full deployment instructions, including environment variables and CORS configuration, are in [backend/README.md](./backend/README.md#deploy-to-the-cloud).
+
+## Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| `No module named 'langchain_groq'` | Activate the virtual environment: `source .venv/bin/activate` |
+| Ask My Docs returns errors | Set `HUGGINGFACE_API_KEY` and `SUPABASE_DB_URL` in `backend/.env`, then call `POST /rag/rebuild` |
+| Web UI can't reach the API | Confirm the backend is running on port 8000 and `FASTAPI_URL` in `web/.env.local` matches |
+
+For deeper troubleshooting and API details, see [backend/README.md](./backend/README.md) and [web/README.md](./web/README.md).
